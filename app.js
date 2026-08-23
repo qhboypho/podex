@@ -5,6 +5,7 @@
   const DraftStore = globalThis.FormDraftStore;
   const FabricEngine = globalThis.FormFabricEngine;
   const ChromaKey = globalThis.FormChromaKey;
+  const Icons = globalThis.FormIcons;
   if (!Core) {
     throw new Error('Không thể khởi tạo bộ xử lý FORM.');
   }
@@ -176,6 +177,26 @@
     wmShadowBlurOut: $('#wmShadowBlurOut'),
     wmShadowColor: $('#wmShadowColor'),
     wmShadowColorHex: $('#wmShadowColorHex'),
+    // Text & Icon decorations
+    decorAddText: $('#decorAddText'),
+    decorAddIcon: $('#decorAddIcon'),
+    decorMessage: $('#decorMessage'),
+    decorList: $('#decorList'),
+    decorEditor: $('#decorEditor'),
+    decorTextControls: $('#decorTextControls'),
+    decorIconControls: $('#decorIconControls'),
+    decorTextContent: $('#decorTextContent'),
+    decorFontSelect: $('#decorFontSelect'),
+    decorIconGrid: $('#decorIconGrid'),
+    decorSizeLabel: $('#decorSizeLabel'),
+    decorSizeRange: $('#decorSizeRange'),
+    decorSizeOutput: $('#decorSizeOutput'),
+    decorColorPicker: $('#decorColorPicker'),
+    decorColorHex: $('#decorColorHex'),
+    decorRotationRange: $('#decorRotationRange'),
+    decorRotationOutput: $('#decorRotationOutput'),
+    decorOpacityRange: $('#decorOpacityRange'),
+    decorOpacityOutput: $('#decorOpacityOutput'),
   };
 
   const presetNames = {
@@ -493,6 +514,11 @@
 
     // Live watermark preview (canvas) — mirrors the export renderer exactly
     renderWatermarkPreview();
+
+    // Text & icon decorations: đồng bộ hit-layer ngay, vẽ canvas theo rAF
+    syncDecorHitNodes();
+    scheduleDecorPreview();
+    syncDecorPanel();
 
     // logoOverlay now serves ONLY as the drag handle for single mode.
     // The visible watermark is painted on watermarkCanvas.
@@ -2218,6 +2244,177 @@
     return promise;
   }
 
+  // ─── Text & icon decorations ──────────────────────────────────────────────
+  // Vẽ lên một canvas riêng trên artboard (dưới watermark) và dùng lại cùng bộ
+  // vẽ cho ảnh xuất nên preview và PNG luôn trùng khớp. Kích thước chữ/icon
+  // được định nghĩa theo bề rộng tham chiếu, scale tỷ lệ với canvas.
+  const DECOR_REFERENCE_WIDTH = 400;
+
+  let decorCanvas = null;
+  let decorCtx = null;
+  let decorHitLayer = null;
+  let decorPreviewPending = false;
+  let decorPreviewToken = 0;
+  let decorDrag = null;
+  const _decorHitNodes = new Map();
+
+  function ensureDecorLayers() {
+    if (!decorCanvas) {
+      decorCanvas = document.createElement('canvas');
+      decorCanvas.className = 'decor-canvas';
+      decorCanvas.setAttribute('aria-hidden', 'true');
+      // Chèn trước watermark canvas để watermark luôn nằm trên chữ/icon.
+      element.watermarkCanvas.parentNode.insertBefore(decorCanvas, element.watermarkCanvas);
+      decorCtx = decorCanvas.getContext('2d');
+    }
+    if (!decorHitLayer) {
+      decorHitLayer = document.createElement('div');
+      decorHitLayer.className = 'decor-hitlayer';
+      element.artboard.appendChild(decorHitLayer);
+    }
+  }
+
+  function fontStringForDecor(item, sizePx) {
+    return `${item.style || 'normal'} ${sizePx}px "${item.font || 'Arial'}", sans-serif`;
+  }
+
+  async function drawDecorItem(context, W, H, item) {
+    const k = W / DECOR_REFERENCE_WIDTH;
+    context.save();
+    context.globalAlpha = item.opacity;
+    context.translate(W * item.x / 100, H * item.y / 100);
+    context.rotate(item.rotation * Math.PI / 180);
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    if (item.type === 'text') {
+      const content = String(item.content || '');
+      if (!content.trim()) { context.restore(); return; }
+      await ensureFont(fontStringForDecor(item, item.fontSize * k), content);
+      context.font = fontStringForDecor(item, item.fontSize * k);
+      context.fillStyle = item.color;
+      context.fillText(content, 0, 0);
+    } else {
+      const src = Icons?.getSrc?.(item.iconId, item.color);
+      if (!src) { context.restore(); return; }
+      const image = await loadImage(src);
+      const size = item.size * k;
+      context.drawImage(image, -size / 2, -size / 2, size, size);
+    }
+    context.restore();
+  }
+
+  async function drawDecorations(context, W, H) {
+    for (const item of [...Core.getTextItems(scene), ...Core.getIconItems(scene)]) {
+      await drawDecorItem(context, W, H, item);
+    }
+  }
+
+  async function runDecorPreview() {
+    if (!decorCanvas) return;
+    decorPreviewPending = false;
+    const token = ++decorPreviewToken;
+    const rect = element.artboard.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = Math.max(1, Math.round(rect.width * dpr));
+    const H = Math.max(1, Math.round(rect.height * dpr));
+    if (decorCanvas.width !== W) decorCanvas.width = W;
+    if (decorCanvas.height !== H) decorCanvas.height = H;
+    decorCtx.clearRect(0, 0, W, H);
+
+    const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
+    for (const item of items) {
+      await drawDecorItem(decorCtx, W, H, item);
+      if (token !== decorPreviewToken) return;
+    }
+  }
+
+  function scheduleDecorPreview() {
+    if (decorPreviewPending) return;
+    decorPreviewPending = true;
+    requestAnimationFrame(() => { void runDecorPreview(); });
+  }
+
+  function syncDecorHitNodes() {
+    ensureDecorLayers();
+    const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
+    const seen = new Set();
+    const active = scene.activeDecor;
+    for (const item of items) {
+      const key = `${item.type}:${item.id}`;
+      seen.add(key);
+      let node = _decorHitNodes.get(key);
+      if (!node) {
+        node = document.createElement('button');
+        node.type = 'button';
+        node.className = 'decor-hit';
+        node.dataset.decorType = item.type;
+        node.dataset.decorId = String(item.id);
+        node.addEventListener('pointerdown', onDecorHitPointerDown);
+        decorHitLayer.appendChild(node);
+        _decorHitNodes.set(key, node);
+      }
+      node.style.left = `${item.x}%`;
+      node.style.top = `${item.y}%`;
+      const isActive = active?.type === item.type && active?.id === item.id;
+      node.classList.toggle('selected', Boolean(isActive));
+      node.classList.toggle('locked-decor', item.locked);
+    }
+    for (const [key, node] of _decorHitNodes) {
+      if (!seen.has(key)) {
+        node.remove();
+        _decorHitNodes.delete(key);
+      }
+    }
+  }
+
+  // ── Kéo thả text/icon trực tiếp trên artboard ─────────────────────────────
+  function onDecorHitPointerDown(event) {
+    if (event.button !== 0 || brushState.active) return;
+    const node = event.currentTarget;
+    const type = node.dataset.decorType;
+    const id = Number(node.dataset.decorId);
+    const item = Core.findDecorItem(scene, type, id);
+    if (!item) return;
+    event.stopPropagation();
+    event.preventDefault();
+    if (scene.activeDecor?.type !== type || scene.activeDecor?.id !== id) {
+      scene = Core.selectDecor(scene, { type, id });
+      markDirty();
+      render();
+    }
+    if (item.locked) return;
+    decorDrag = {
+      pointerId: event.pointerId,
+      type,
+      id,
+      rect: element.artboard.getBoundingClientRect(),
+      startX: event.clientX,
+      startY: event.clientY,
+      x: item.x,
+      y: item.y,
+    };
+    node.setPointerCapture(event.pointerId);
+  }
+
+  window.addEventListener('pointermove', (event) => {
+    if (!decorDrag || decorDrag.pointerId !== event.pointerId) return;
+    const x = decorDrag.x + ((event.clientX - decorDrag.startX) / decorDrag.rect.width) * 100;
+    const y = decorDrag.y + ((event.clientY - decorDrag.startY) / decorDrag.rect.height) * 100;
+    scene = decorDrag.type === 'text'
+      ? Core.updateTextItem(scene, { x, y }, decorDrag.id)
+      : Core.updateIconItem(scene, { x, y }, decorDrag.id);
+    markDirty();
+    render();
+  });
+  const stopDecorDrag = (event) => {
+    if (!decorDrag || decorDrag.pointerId !== event.pointerId) return;
+    const node = _decorHitNodes.get(`${decorDrag.type}:${decorDrag.id}`);
+    if (node?.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
+    decorDrag = null;
+  };
+  window.addEventListener('pointerup', stopDecorDrag);
+  window.addEventListener('pointercancel', stopDecorDrag);
+
   async function exportPng() {
     element.exportButton.disabled = true;
     const { width, height, ratio, scale } = Core.getExportDimensionsScaled(scene, exportParams.scale);
@@ -2246,6 +2443,9 @@
       for (const ov of currentOverlays) {
         await drawArtworkWithFabric(context, baseImage, width, height, ov);
       }
+
+      // Chữ & icon: vẽ phẳng (không warp vải), cùng hệ quy chiếu với preview
+      await drawDecorations(context, width, height);
 
       if (scene.logo.enabled) {
         // Vẽ watermark vào canvas tạm có alpha để blend mode & opacity hoạt động
@@ -2440,6 +2640,223 @@
   if (element.artworkChromaBlack) {
     element.artworkChromaBlack.addEventListener('click', () => applyChromaKeyToActive('black'));
   }
+
+  // ─── Text & icon panel ────────────────────────────────────────────────────
+  function fillDecorFontSelect() {
+    if (!element.decorFontSelect || element.decorFontSelect.options.length) return;
+    for (const font of Core.TEXT_FONTS) {
+      const option = document.createElement('option');
+      option.value = font;
+      option.textContent = font;
+      element.decorFontSelect.appendChild(option);
+    }
+  }
+
+  function buildDecorIconGrid() {
+    if (!element.decorIconGrid || element.decorIconGrid.children.length) return;
+    const fragment = document.createDocumentFragment();
+    for (const icon of Icons.list()) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'decor-icon-cell';
+      cell.dataset.iconId = icon.id;
+      cell.title = icon.name;
+      const image = document.createElement('img');
+      image.alt = icon.name;
+      image.draggable = false;
+      cell.appendChild(image);
+      cell.addEventListener('click', () => {
+        const active = scene.activeDecor;
+        if (active?.type === 'icon') {
+          scene = Core.updateIconItem(scene, { iconId: icon.id });
+          markDirty();
+          render();
+        } else {
+          addIconToScene({ iconId: icon.id });
+        }
+      });
+      fragment.appendChild(cell);
+    }
+    element.decorIconGrid.appendChild(fragment);
+  }
+
+  function addTextToScene(patch = {}) {
+    scene = Core.addTextItem(scene, patch);
+    markDirty();
+    render();
+    setMessage(element.decorMessage, 'Đã thêm chữ — kéo trên preview để đặt vị trí.', 'success');
+    setStatus('Đã thêm lớp chữ');
+  }
+
+  function addIconToScene(patch = {}) {
+    scene = Core.addIconItem(scene, { iconId: 'star', ...patch });
+    markDirty();
+    render();
+    setMessage(element.decorMessage, 'Đã thêm icon — chọn kiểu khác trong thư viện bên dưới.', 'success');
+    setStatus('Đã thêm lớp icon');
+  }
+
+  function updateActiveDecor(patch) {
+    const selection = scene.activeDecor;
+    if (!selection) return;
+    scene = selection.type === 'text'
+      ? Core.updateTextItem(scene, patch, selection.id)
+      : Core.updateIconItem(scene, patch, selection.id);
+    markDirty();
+    render();
+  }
+
+  function removeDecorItem(type, id) {
+    scene = type === 'text' ? Core.removeTextItem(scene, id) : Core.removeIconItem(scene, id);
+    markDirty();
+    render();
+    showToast('Đã xóa lớp khỏi mặt đang chọn.');
+  }
+
+  function toggleDecorLockById(type, id) {
+    scene = Core.toggleDecorLock(scene, type, id);
+    markDirty();
+    render();
+  }
+
+  function renderDecorList(texts, icons, selection) {
+    const rows = [
+      ...texts.map((item) => ({ type: 'text', item })),
+      ...icons.map((item) => ({ type: 'icon', item })),
+    ];
+    let html = '';
+    for (const { type, item } of rows) {
+      const isActive = selection?.type === type && selection?.id === item.id;
+      const thumb = type === 'text'
+        ? '<span>Aa</span>'
+        : `<img src="${Icons.getSrc(item.iconId, item.color)}" alt="" />`;
+      const title = type === 'text' ? (item.content || '(trống)').slice(0, 22) : (Icons.has(item.iconId) ? item.iconId : '?');
+      html += `<div class="artwork-list-item${isActive ? ' active' : ''}${item.locked ? ' locked' : ''}" data-decor-row="${type}:${item.id}">`
+        + `<div class="decor-item-thumb">${thumb}</div>`
+        + `<div class="artwork-item-info"><span class="artwork-item-name">${escapeHtml(title)}</span>`
+        + `<span class="artwork-item-meta">${type === 'text' ? `${item.font} · ${item.fontSize}px` : 'Icon'}${item.locked ? ' · 🔒' : ''}</span></div>`
+        + `<button class="artwork-item-lock" data-decor-lock="${type}:${item.id}" type="button" title="${item.locked ? 'Mở khóa' : 'Khóa'}">${item.locked ? '🔒' : '🔓'}</button>`
+        + `<button class="artwork-item-remove" data-decor-remove="${type}:${item.id}" type="button" title="Xóa">✕</button>`
+        + `</div>`;
+    }
+    element.decorList.innerHTML = html;
+
+    element.decorList.querySelectorAll('.artwork-list-item').forEach((row) => {
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('[data-decor-lock], [data-decor-remove]')) return;
+        const [type, id] = row.dataset.decorRow.split(':');
+        scene = Core.selectDecor(scene, { type, id: Number(id) });
+        markDirty();
+        render();
+      });
+    });
+    element.decorList.querySelectorAll('[data-decor-lock]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const [type, id] = button.dataset.decorLock.split(':');
+        toggleDecorLockById(type, Number(id));
+      });
+    });
+    element.decorList.querySelectorAll('[data-decor-remove]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const [type, id] = button.dataset.decorRemove.split(':');
+        removeDecorItem(type, Number(id));
+      });
+    });
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[char]);
+  }
+
+  function syncDecorPanel() {
+    fillDecorFontSelect();
+    buildDecorIconGrid();
+    const selection = scene.activeDecor;
+    const item = selection ? Core.findDecorItem(scene, selection.type, selection.id) : null;
+    element.decorEditor.classList.toggle('hidden', !item);
+    element.decorTextControls.style.display = item?.type === 'text' ? '' : 'none';
+    element.decorIconControls.style.display = item?.type === 'icon' ? '' : 'none';
+    element.decorAddText.textContent = '＋ Thêm chữ';
+    element.decorSizeLabel.textContent = item?.type === 'text' ? 'Cỡ chữ' : 'Cỡ icon';
+
+    renderDecorList(Core.getTextItems(scene), Core.getIconItems(scene), selection);
+    if (selection?.type === 'icon') {
+      element.decorIconGrid.querySelectorAll('.decor-icon-cell').forEach((cell) => {
+        cell.querySelector('img').src = Icons.getSrc(cell.dataset.iconId, item?.color || '#17211e');
+        cell.classList.toggle('active', item?.iconId === cell.dataset.iconId);
+      });
+    }
+
+    if (!item) return;
+    const isText = item.type === 'text';
+    if (isText) {
+      element.decorSizeRange.min = String(Core.MIN_TEXT_FONT_SIZE);
+      element.decorSizeRange.max = String(Core.MAX_TEXT_FONT_SIZE);
+      // Không ghi đè value khi người dùng đang gõ để tránh nhảy con trỏ.
+      if (document.activeElement !== element.decorTextContent) {
+        element.decorTextContent.value = item.content;
+      }
+      element.decorFontSelect.value = item.font;
+      $$('#decorStyleGroup .decor-style-btn').forEach((button) => {
+        button.classList.toggle('active', button.dataset.decorStyle === item.style);
+      });
+    } else {
+      element.decorSizeRange.min = String(Core.MIN_ICON_SIZE);
+      element.decorSizeRange.max = String(Core.MAX_ICON_SIZE);
+    }
+    element.decorSizeRange.value = String(isText ? item.fontSize : item.size);
+    element.decorSizeOutput.textContent = `${Math.round(isText ? item.fontSize : item.size)}px`;
+    element.decorColorPicker.value = item.color;
+    element.decorColorHex.value = item.color;
+    element.decorRotationRange.value = String(item.rotation);
+    element.decorRotationOutput.textContent = degree(item.rotation);
+    element.decorOpacityRange.value = String(Math.round(item.opacity * 100));
+    element.decorOpacityOutput.textContent = percentage(item.opacity);
+  }
+
+  element.decorAddText.addEventListener('click', () => addTextToScene());
+  element.decorAddIcon.addEventListener('click', () => addIconToScene());
+
+  element.decorTextContent.addEventListener('input', () => {
+    updateActiveDecor({ content: element.decorTextContent.value });
+  });
+  element.decorFontSelect.addEventListener('change', () => {
+    updateActiveDecor({ font: element.decorFontSelect.value });
+  });
+  $$('#decorStyleGroup .decor-style-btn').forEach((button) => {
+    button.addEventListener('click', () => updateActiveDecor({ style: button.dataset.decorStyle }));
+  });
+
+  element.decorSizeRange.addEventListener('input', () => {
+    const value = Number(element.decorSizeRange.value);
+    element.decorSizeOutput.textContent = `${value}px`;
+    updateActiveDecor(scene.activeDecor?.type === 'text' ? { fontSize: value } : { size: value });
+  });
+  element.decorColorPicker.addEventListener('input', () => {
+    element.decorColorHex.value = element.decorColorPicker.value;
+    updateActiveDecor({ color: element.decorColorPicker.value });
+  });
+  element.decorColorHex.addEventListener('change', () => {
+    const value = element.decorColorHex.value.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) {
+      element.decorColorPicker.value = value;
+      updateActiveDecor({ color: value });
+    }
+  });
+  element.decorRotationRange.addEventListener('input', () => {
+    const value = Number(element.decorRotationRange.value);
+    element.decorRotationOutput.textContent = degree(value);
+    updateActiveDecor({ rotation: value });
+  });
+  element.decorOpacityRange.addEventListener('input', () => {
+    const value = Number(element.decorOpacityRange.value);
+    element.decorOpacityOutput.textContent = percentage(value / 100);
+    updateActiveDecor({ opacity: value / 100 });
+  });
 
   element.baseLockToggle.addEventListener('click', () => {
     baseLocked = !baseLocked;
@@ -2919,6 +3336,9 @@
     const fonts = new Set(['Arial', 'Georgia', 'Times New Roman', 'Courier New',
       'Verdana', 'Trebuchet MS', 'Impact', 'Palatino Linotype']);
     if (scene.logo?.textFont) fonts.add(scene.logo.textFont);
+    for (const item of [...Core.getTextItems(scene), ...Core.getIconItems(scene)]) {
+      if (item.type === 'text' && item.font) fonts.add(item.font);
+    }
     const styles = ['normal', 'italic', 'bold', 'bold italic'];
     const jobs = [];
     for (const f of fonts) {

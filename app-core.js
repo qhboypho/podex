@@ -74,6 +74,22 @@ const MIN_WORKSPACE_ZOOM = .55;
 const MAX_WORKSPACE_ZOOM = 1.8;
 const MAX_WORKSPACE_PAN = 640;
 
+// ─── Text & Icon decorations ──────────────────────────────────────────────
+const TEXT_FONTS = Object.freeze(['Arial', 'Georgia', 'Times New Roman', 'Courier New', 'Verdana',
+  'Trebuchet MS', 'Impact', 'Palatino Linotype']);
+const TEXT_STYLES = Object.freeze(['normal', 'bold', 'italic', 'bold italic']);
+const MIN_TEXT_FONT_SIZE = 8;
+const MAX_TEXT_FONT_SIZE = 160;
+const MIN_ICON_SIZE = 10;
+const MAX_ICON_SIZE = 220;
+const MAX_DECOR_ROTATION = 90;
+const MAX_DECOR_TEXT_LENGTH = 120;
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function normalizeHexColor(value, fallback) {
+  return typeof value === 'string' && HEX_COLOR_RE.test(value) ? value : fallback;
+}
+
 const round = (value, precision = 3) => Number(Number(value).toFixed(precision));
 
 function normalizeWorkspaceView(view = {}) {
@@ -130,6 +146,71 @@ const createOverlay = (side) => ({
   artwork: { ...DEFAULT_ARTWORK },
 });
 
+// Text & icon dùng chung một dãy id để selection (type, id) luôn duy nhất.
+let _decorIdCounter = 0;
+
+function constrainTextItem(item) {
+  return {
+    ...item,
+    x: round(clamp(number(item.x, 50), 3, 97)),
+    y: round(clamp(number(item.y, 42), 3, 97)),
+    fontSize: clamp(Math.round(number(item.fontSize, 28)), MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE),
+    rotation: clamp(round(number(item.rotation, 0)), -MAX_DECOR_ROTATION, MAX_DECOR_ROTATION),
+    opacity: clamp(number(item.opacity, 1), 0.05, 1),
+    locked: Boolean(item.locked),
+    content: String(item.content ?? '').slice(0, MAX_DECOR_TEXT_LENGTH),
+    font: TEXT_FONTS.includes(item.font) ? item.font : 'Arial',
+    style: TEXT_STYLES.includes(item.style) ? item.style : 'bold',
+    color: normalizeHexColor(item.color, '#17211e'),
+  };
+}
+
+function constrainIconItem(item) {
+  return {
+    ...item,
+    x: round(clamp(number(item.x, 50), 3, 97)),
+    y: round(clamp(number(item.y, 42), 3, 97)),
+    size: clamp(Math.round(number(item.size, 40)), MIN_ICON_SIZE, MAX_ICON_SIZE),
+    rotation: clamp(round(number(item.rotation, 0)), -MAX_DECOR_ROTATION, MAX_DECOR_ROTATION),
+    opacity: clamp(number(item.opacity, 1), 0.05, 1),
+    locked: Boolean(item.locked),
+    iconId: String(item.iconId || ''),
+    color: normalizeHexColor(item.color, '#17211e'),
+  };
+}
+
+const createTextItem = (side, patch = {}) => constrainTextItem({
+  id: ++_decorIdCounter,
+  type: 'text',
+  side,
+  x: 50,
+  y: 42,
+  content: 'NEW TEXT',
+  font: 'Arial',
+  style: 'bold',
+  fontSize: 28,
+  color: '#17211e',
+  rotation: 0,
+  opacity: 1,
+  locked: false,
+  ...patch,
+});
+
+const createIconItem = (side, patch = {}) => constrainIconItem({
+  id: ++_decorIdCounter,
+  type: 'icon',
+  side,
+  x: 50,
+  y: 55,
+  size: 40,
+  iconId: '',
+  color: '#17211e',
+  rotation: 0,
+  opacity: 1,
+  locked: false,
+  ...patch,
+});
+
 function createScene() {
   const frontOverlay = createOverlay('front');
   const backOverlay = createOverlay('back');
@@ -167,6 +248,11 @@ function createScene() {
     overlays: [frontOverlay],
     backOverlays: [backOverlay],
     activeOverlayId: frontOverlay.id,
+    textItems: [],
+    backTextItems: [],
+    iconItems: [],
+    backIconItems: [],
+    activeDecor: null,
   });
 }
 
@@ -271,6 +357,10 @@ function setBaseTransform(scene, transform = {}, { moveAttached = true } = {}) {
     safeArea,
     overlays: scene.overlays.map(moveOverlayItem),
     backOverlays: scene.backOverlays.map(moveOverlayItem),
+    textItems: moveAllDecorItems(scene.textItems || [], deltaX, deltaY, constrainTextItem),
+    backTextItems: moveAllDecorItems(scene.backTextItems || [], deltaX, deltaY, constrainTextItem),
+    iconItems: moveAllDecorItems(scene.iconItems || [], deltaX, deltaY, constrainIconItem),
+    backIconItems: moveAllDecorItems(scene.backIconItems || [], deltaX, deltaY, constrainIconItem),
   });
 }
 
@@ -422,9 +512,25 @@ function plainOverlay(overlay) {
   };
 }
 
+function plainDecorItem(item) {
+  return {
+    id: item.id,
+    type: item.type,
+    side: item.side,
+    x: item.x,
+    y: item.y,
+    rotation: item.rotation,
+    opacity: item.opacity,
+    locked: item.locked || false,
+    ...(item.type === 'text'
+      ? { content: item.content, font: item.font, style: item.style, fontSize: item.fontSize, color: item.color }
+      : { iconId: item.iconId, size: item.size, color: item.color }),
+  };
+}
+
 function serializeDraft(scene) {
   return {
-    version: 2,
+    version: 3,
     view: scene.view,
     canvasRatio: normalizeCanvasRatio(scene.canvasRatio),
     baseTransform: {
@@ -469,6 +575,11 @@ function serializeDraft(scene) {
     activeOverlayId: scene.activeOverlayId,
     overlays: scene.overlays.map(plainOverlay),
     backOverlays: scene.backOverlays.map(plainOverlay),
+    textItems: (scene.textItems || []).map(plainDecorItem),
+    backTextItems: (scene.backTextItems || []).map(plainDecorItem),
+    iconItems: (scene.iconItems || []).map(plainDecorItem),
+    backIconItems: (scene.backIconItems || []).map(plainDecorItem),
+    activeDecor: scene.activeDecor || null,
     // Legacy fields for backward compat reads
     overlay: plainOverlay(scene.overlays[0] || createOverlay('front')),
     backOverlay: plainOverlay(scene.backOverlays[0] || createOverlay('back')),
@@ -502,7 +613,7 @@ function applyOverlayDraft(scene, listKey, idx, draftOverlay) {
 }
 
 function applyDraft(scene, draft) {
-  if (!draft || (draft.version !== 1 && draft.version !== 2) || typeof draft !== 'object') return scene;
+  if (!draft || (draft.version !== 1 && draft.version !== 2 && draft.version !== 3) || typeof draft !== 'object') return scene;
   const safeArea = normalizeSafeArea(draft.safeArea, scene.safeArea);
   let next = {
     ...scene,
@@ -545,6 +656,31 @@ function applyDraft(scene, draft) {
     // v1: single overlay/backOverlay → convert to array
     next = applyOverlayDraft(next, 'overlays', 0, draft.overlay);
     next = applyOverlayDraft(next, 'backOverlays', 0, draft.backOverlay);
+  }
+
+  if (draft.version === 3 && Array.isArray(draft.textItems) && Array.isArray(draft.iconItems)) {
+    const restoreDecor = (list) => (list || []).map((d) => {
+      if (!d || typeof d !== 'object') return null;
+      return d.type === 'icon'
+        ? constrainIconItem({ ...createIconItem(d.side), ...d })
+        : constrainTextItem({ ...createTextItem(d.side), ...d });
+    }).filter(Boolean);
+    const withDecor = {
+      ...next,
+      textItems: restoreDecor(draft.textItems),
+      backTextItems: restoreDecor(draft.backTextItems),
+      iconItems: restoreDecor(draft.iconItems),
+      backIconItems: restoreDecor(draft.backIconItems),
+    };
+    // Resolve selection trên scene đã có danh sách mới.
+    withDecor.activeDecor = resolveDecorSelection(withDecor, draft.activeDecor);
+    next = withDecor;
+    // Đồng bộ counter để id mới không đụng id đã khôi phục.
+    for (const list of [next.textItems, next.backTextItems, next.iconItems, next.backIconItems]) {
+      for (const item of list) {
+        if (item.id > _decorIdCounter) _decorIdCounter = item.id;
+      }
+    }
   }
   return withLegacy({ ...next, view: draft.view === 'back' ? 'back' : 'front' });
 }
@@ -620,8 +756,139 @@ function toggleOverlayLock(scene, overlayId) {
   return withLegacy({ ...scene, [listKey]: newList });
 }
 
+// ─── Text & icon decoration API ───────────────────────────────────────────
+const DECOR_KEYS = {
+  text: { front: 'textItems', back: 'backTextItems' },
+  icon: { front: 'iconItems', back: 'backIconItems' },
+};
+
+function getDecorList(scene, type) {
+  const key = DECOR_KEYS[type];
+  if (!key) return [];
+  return scene.view === 'back' ? scene[key.back] : scene[key.front];
+}
+
+function getDecorListKey(scene, type) {
+  return scene.view === 'back' ? DECOR_KEYS[type]?.back : DECOR_KEYS[type]?.front;
+}
+
+function getTextItems(scene) {
+  return getDecorList(scene, 'text');
+}
+
+function getIconItems(scene) {
+  return getDecorList(scene, 'icon');
+}
+
+function resolveDecorSelection(scene, selection) {
+  if (!selection || (selection.type !== 'text' && selection.type !== 'icon')) return null;
+  const item = getDecorList(scene, selection.type).find((entry) => entry.id === selection.id);
+  return item ? { type: selection.type, id: item.id } : null;
+}
+
+function findDecorItem(scene, type, id) {
+  return getDecorList(scene, type).find((entry) => entry.id === id) || null;
+}
+
+function selectDecor(scene, selection) {
+  return { ...scene, activeDecor: resolveDecorSelection(scene, selection) };
+}
+
+function addTextItem(scene, patch = {}) {
+  const side = scene.view === 'back' ? 'back' : 'front';
+  const item = createTextItem(side, patch);
+  const listKey = getDecorListKey(scene, 'text');
+  return {
+    ...scene,
+    [listKey]: [...scene[listKey], item],
+    activeDecor: { type: 'text', id: item.id },
+  };
+}
+
+function addIconItem(scene, patch = {}) {
+  const side = scene.view === 'back' ? 'back' : 'front';
+  const item = createIconItem(side, patch);
+  const listKey = getDecorListKey(scene, 'icon');
+  return {
+    ...scene,
+    [listKey]: [...scene[listKey], item],
+    activeDecor: { type: 'icon', id: item.id },
+  };
+}
+
+function updateTextItem(scene, patch, itemId) {
+  const selection = resolveDecorSelection(scene, { type: 'text', id: itemId ?? scene.activeDecor?.id });
+  if (!selection) return scene;
+  const listKey = getDecorListKey(scene, 'text');
+  const list = scene[listKey];
+  return {
+    ...scene,
+    [listKey]: list.map((item) => (item.id === selection.id ? constrainTextItem({ ...item, ...patch }) : item)),
+  };
+}
+
+function updateIconItem(scene, patch, itemId) {
+  const selection = resolveDecorSelection(scene, { type: 'icon', id: itemId ?? scene.activeDecor?.id });
+  if (!selection) return scene;
+  const listKey = getDecorListKey(scene, 'icon');
+  const list = scene[listKey];
+  return {
+    ...scene,
+    [listKey]: list.map((item) => (item.id === selection.id ? constrainIconItem({ ...item, ...patch }) : item)),
+  };
+}
+
+function removeTextItem(scene, itemId) {
+  const listKey = getDecorListKey(scene, 'text');
+  if (!listKey) return scene;
+  const list = scene[listKey];
+  if (!list.some((item) => item.id === itemId)) return scene;
+  return {
+    ...scene,
+    [listKey]: list.filter((item) => item.id !== itemId),
+    activeDecor: scene.activeDecor?.type === 'text' && scene.activeDecor.id === itemId
+      ? null
+      : scene.activeDecor,
+  };
+}
+
+function removeIconItem(scene, itemId) {
+  const listKey = getDecorListKey(scene, 'icon');
+  if (!listKey) return scene;
+  const list = scene[listKey];
+  if (!list.some((item) => item.id === itemId)) return scene;
+  return {
+    ...scene,
+    [listKey]: list.filter((item) => item.id !== itemId),
+    activeDecor: scene.activeDecor?.type === 'icon' && scene.activeDecor.id === itemId
+      ? null
+      : scene.activeDecor,
+  };
+}
+
+function toggleDecorLock(scene, type, itemId) {
+  const listKey = getDecorListKey(scene, type);
+  if (!listKey) return scene;
+  const list = scene[listKey];
+  if (!list.some((item) => item.id === itemId)) return scene;
+  return {
+    ...scene,
+    [listKey]: list.map((item) => (item.id === itemId ? { ...item, locked: !item.locked } : item)),
+  };
+}
+
+function moveAllDecorItems(items, deltaX, deltaY, constrain) {
+  return items.map((item) => constrain({
+    ...item,
+    x: number(item.x, 50) + deltaX,
+    y: number(item.y, 50) + deltaY,
+  }));
+}
+
 globalThis.FormCore = {
   addOverlay,
+  addIconItem,
+  addTextItem,
   applyDraft,
   DEFAULT_ARTWORK,
   DEFAULT_BASE_SRC,
@@ -629,6 +896,12 @@ globalThis.FormCore = {
   EXPORT_SCALES,
   DEFAULT_SAFE_AREA,
   MAX_IMAGE_BYTES,
+  MIN_TEXT_FONT_SIZE,
+  MAX_TEXT_FONT_SIZE,
+  MIN_ICON_SIZE,
+  MAX_ICON_SIZE,
+  TEXT_FONTS,
+  TEXT_STYLES,
   createScene,
   getBaseDisplayBox,
   getExportDimensions,
@@ -638,15 +911,22 @@ globalThis.FormCore = {
   getOverlayById,
   getExportFileName,
   getOverlayStyle,
+  getTextItems,
+  getIconItems,
+  findDecorItem,
   isEditableLayer,
   moveOverlay,
   normalizeWorkspaceView,
   removeOverlay,
+  removeTextItem,
+  removeIconItem,
   resizeOverlay,
   rotateOverlay,
   resetBase,
+  selectDecor,
   selectOverlayById,
   serializeDraft,
+  toggleDecorLock,
   toggleOverlayLock,
   setSafeArea,
   selectView,
@@ -656,6 +936,8 @@ globalThis.FormCore = {
   setCanvasRatio,
   setLogo,
   updateOverlay,
+  updateTextItem,
+  updateIconItem,
   validateImageFile,
 };
 })();

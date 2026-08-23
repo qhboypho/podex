@@ -5,6 +5,8 @@ import '../app-core.js';
 
 const {
   MAX_IMAGE_BYTES,
+  MIN_TEXT_FONT_SIZE,
+  MAX_TEXT_FONT_SIZE,
   createScene,
   applyDraft,
   getExportDimensions,
@@ -12,6 +14,17 @@ const {
   getActiveOverlay,
   getExportFileName,
   getOverlayStyle,
+  getTextItems,
+  getIconItems,
+  findDecorItem,
+  addTextItem,
+  addIconItem,
+  updateTextItem,
+  updateIconItem,
+  removeTextItem,
+  removeIconItem,
+  selectDecor,
+  toggleDecorLock,
   isEditableLayer,
   moveOverlay,
   normalizeWorkspaceView,
@@ -266,4 +279,132 @@ test('applies a valid draft to controls while preserving whatever locked source 
 test('ignores a malformed draft instead of altering the current scene', () => {
   const scene = createScene();
   assert.equal(applyDraft(scene, { version: 9 }), scene);
+});
+
+// ─── Text & icon decorations ────────────────────────────────────────────────
+
+test('adds a text item on the current side and selects it', () => {
+  let scene = addTextItem(createScene());
+  assert.equal(getTextItems(scene).length, 1);
+  const item = getTextItems(scene)[0];
+  assert.equal(item.type, 'text');
+  assert.equal(item.side, 'front');
+  assert.deepEqual(scene.activeDecor, { type: 'text', id: item.id });
+});
+
+test('routes added text items to the back-side list while viewing the back', () => {
+  let scene = selectView(createScene(), 'back');
+  scene = addTextItem(scene);
+  assert.equal(scene.textItems.length, 0);
+  assert.equal(scene.backTextItems.length, 1);
+  assert.equal(getTextItems(scene)[0].side, 'back');
+});
+
+test('clamps text content length, font size and position into safe bounds', () => {
+  let scene = addTextItem(createScene());
+  scene = updateTextItem(scene, {
+    x: -40,
+    y: 250,
+    fontSize: 9999,
+    rotation: -500,
+    opacity: 12,
+    content: 'x'.repeat(500),
+    font: 'Not-A-Font',
+    style: 'rainbow',
+    color: 'javascript:void(0)',
+  }, scene.activeDecor.id);
+  const item = getTextItems(scene)[0];
+  assert.equal(item.x > 0 && item.x < 10, true);
+  assert.equal(item.y <= 97, true);
+  assert.equal(item.fontSize, MAX_TEXT_FONT_SIZE);
+  assert.equal(item.rotation, -90);
+  assert.equal(item.opacity, 1);
+  assert.equal(item.content.length, 120);
+  assert.equal(item.font, 'Arial');
+  assert.equal(item.style, 'bold');
+  assert.equal(item.color, '#17211e');
+});
+
+test('updates only the targeted text item and keeps other layers intact', () => {
+  let scene = addTextItem(createScene());
+  scene = addTextItem(scene);
+  const [first, second] = getTextItems(scene);
+  scene = updateTextItem(scene, { x: 20, y: 30, fontSize: MIN_TEXT_FONT_SIZE }, second.id);
+  const kept = findDecorItem(scene, 'text', first.id);
+  const moved = findDecorItem(scene, 'text', second.id);
+  assert.equal(kept.x, first.x);
+  assert.equal(moved.x, 20);
+  assert.equal(moved.fontSize, MIN_TEXT_FONT_SIZE);
+});
+
+test('adds icons with a registry id and clamps their size like text', () => {
+  let scene = addIconItem(createScene(), { iconId: 'star', size: 4000 });
+  const item = getIconItems(scene)[0];
+  assert.equal(item.type, 'icon');
+  assert.equal(item.iconId, 'star');
+  assert.equal(item.size >= 200, true);
+  scene = updateIconItem(scene, { iconId: 'flame', color: '#c54a2e' }, item.id);
+  assert.equal(findDecorItem(scene, 'icon', item.id).iconId, 'flame');
+  assert.equal(findDecorItem(scene, 'icon', item.id).color, '#c54a2e');
+});
+
+test('removing the active decoration clears the selection', () => {
+  let scene = addTextItem(createScene());
+  const id = scene.activeDecor.id;
+  scene = removeTextItem(scene, id);
+  assert.equal(getTextItems(scene).length, 0);
+  assert.equal(scene.activeDecor, null);
+});
+
+test('decorations follow the base transform like artwork overlays do', () => {
+  let scene = addTextItem(createScene());
+  scene = addIconItem(scene);
+  const beforeText = getTextItems(scene)[0];
+  const beforeIcon = getIconItems(scene)[0];
+  scene = setBaseTransform(scene, { x: 60, y: 60 });
+  const afterText = getTextItems(scene)[0];
+  const afterIcon = getIconItems(scene)[0];
+  assert.equal(afterText.x, Math.round(beforeText.x + 10));
+  assert.equal(Math.abs(afterIcon.y - (beforeIcon.y + 10)) < 3, true);
+});
+
+test('serializes decorations without leaking anything beyond editable state', () => {
+  let scene = addTextItem(createScene(), { content: 'FORM CLUB' });
+  scene = addIconItem(scene, { iconId: 'bolt' });
+  const draft = serializeDraft(scene);
+  assert.equal(draft.version, 3);
+  assert.equal(draft.textItems[0].content, 'FORM CLUB');
+  assert.equal(draft.iconItems[0].iconId, 'bolt');
+  assert.equal(draft.textItems[0].src, undefined);
+  assert.equal(draft.iconItems[0].src, undefined);
+});
+
+test('round-trips a v3 draft including text and icon decorations', () => {
+  let scene = createScene();
+  scene = addTextItem(scene, { content: 'SUNDAY', fontSize: 44 });
+  scene = addIconItem(scene, { iconId: 'gem' });
+  const restored = applyDraft(createScene(), serializeDraft(scene));
+  assert.equal(restored.textItems.length, 1);
+  assert.equal(restored.iconItems.length, 1);
+  assert.equal(restored.textItems[0].content, 'SUNDAY');
+  assert.equal(restored.textItems[0].fontSize, 44);
+  assert.equal(restored.iconItems[0].iconId, 'gem');
+  assert.deepEqual(restored.activeDecor, { type: 'icon', id: restored.iconItems[0].id });
+});
+
+test('still accepts v2 drafts when decorations are absent', () => {
+  const source = setBase(createScene(), { name: 'phoi.png', src: 'blob:base' });
+  const restored = applyDraft(source, {
+    version: 2,
+    canvasRatio: 'square',
+    safeArea: source.safeArea,
+    background: { value: 'linen' },
+    logo: {},
+    overlays: [],
+    backOverlays: [],
+    activeOverlayId: null,
+  });
+  assert.equal(restored.canvasRatio, 'square');
+  assert.equal(restored.textItems.length, 0);
+  assert.equal(restored.iconItems.length, 0);
 });
