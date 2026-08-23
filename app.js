@@ -525,6 +525,7 @@
     syncDecorActionBar();
     scheduleDecorPreview();
     syncDecorPanel();
+    warmBaseHitCache();
 
     // logoOverlay now serves ONLY as the drag handle for single mode.
     // The visible watermark is painted on watermarkCanvas.
@@ -1136,6 +1137,11 @@
       event.preventDefault();
       event.stopPropagation();
     }, true);
+    // Click nền ngoài artboard → bỏ chọn mọi lớp.
+    element.stageWell.addEventListener('click', (event) => {
+      if (event.target !== element.stageWell) return;
+      deselectAllSelections();
+    });
   }
 
   function updatePercentField(field, updater) {
@@ -1326,12 +1332,24 @@
     };
 
     element.artboard.addEventListener('click', (event) => {
+      if (brushState.active) return;
       if (event.target.closest('.artwork-overlay, .logo-overlay, .base-selection, .decor-hitlayer')) return;
       if (event.target === element.baseImage && element.baseImage.dataset.moved === 'true') {
         element.baseImage.dataset.moved = 'false';
         return;
       }
-      selectBase();
+      // Click trúng nội dung phôi (khi mở khóa) → chọn phôi để căn chỉnh.
+      if (event.target === element.baseImage && !baseLocked && isClickOnBaseContent(event)) {
+        if (multiSelectKeys.size > 0 || scene.activeDecor) {
+          multiSelectKeys.clear();
+          scene = Core.selectDecor(scene, null);
+          markDirty();
+        }
+        selectBase();
+        return;
+      }
+      // Click khoảng trống (nền, quanh chữ, quanh phôi) → bỏ chọn tất cả.
+      deselectAllSelections();
     });
 
     element.baseImage.addEventListener('pointerdown', (event) => {
@@ -2324,6 +2342,62 @@
     render();
     const count = multiSelectKeys.size;
     if (count > 1) setStatus(`Đã chọn ${count} lớp — giữ Ctrl/Cmd + click để bỏ chọn`);
+  }
+
+  // Bỏ chọn toàn bộ: nhóm chọn, lớp đơn, lựa chọn phôi. Dùng khi click vùng
+  // trống trên artboard, click nền ngoài artboard, hoặc bấm Escape.
+  function deselectAllSelections() {
+    if (inlineTextEdit) finishInlineTextEdit(false);
+    const hadDecor = Boolean(scene.activeDecor) || multiSelectKeys.size > 0;
+    multiSelectKeys.clear();
+    if (scene.activeDecor) scene = Core.selectDecor(scene, null);
+    baseSelected = false;
+    if (hadDecor) markDirty();
+    render();
+  }
+
+  // ── Click vùng trống → bỏ chọn tất cả ────────────────────────────────────
+  // baseImage phủ kín artboard nên phải kiểm tra alpha pixel: click trúng
+  // phần mờ đục của phôi = chọn phôi, click phần trong suốt = vùng trống.
+  let baseHitCache = null; // { src, width, height, alpha }
+
+  async function buildBaseHitCache() {
+    const src = scene.base.src;
+    if (!src) return;
+    try {
+      const image = await loadImage(src);
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.drawImage(image, 0, 0);
+      baseHitCache = {
+        src,
+        width: canvas.width,
+        height: canvas.height,
+        alpha: context.getImageData(0, 0, canvas.width, canvas.height).data,
+      };
+    } catch {
+      baseHitCache = null;
+    }
+  }
+
+  function warmBaseHitCache() {
+    if (!scene.base.src || baseHitCache?.src !== scene.base.src) void buildBaseHitCache();
+  }
+
+  function isClickOnBaseContent(event) {
+    if (!baseHitCache) return true; // chưa nạp xong → giữ hành vi cũ (chọn phôi)
+    const rect = element.artboard.getBoundingClientRect();
+    const ax = ((event.clientX - rect.left) / rect.width) * 100;
+    const ay = ((event.clientY - rect.top) / rect.height) * 100;
+    const box = Core.getBaseDisplayBox(scene);
+    const ix = (ax - box.x) / box.width + 0.5;
+    const iy = (ay - box.y) / box.height + 0.5;
+    if (ix < 0 || ix > 1 || iy < 0 || iy > 1) return false;
+    const px = Math.min(baseHitCache.width - 1, Math.max(0, Math.floor(ix * baseHitCache.width)));
+    const py = Math.min(baseHitCache.height - 1, Math.max(0, Math.floor(iy * baseHitCache.height)));
+    return baseHitCache.alpha[(py * baseHitCache.width + px) * 4 + 3] > 16;
   }
 
   // Ngưỡng hút snap khi kéo (theo % kích thước artboard).
@@ -3726,6 +3800,11 @@
   attachWorkspaceNavigation();
   attachDropZones();
   initAccordions();
+  // Escape: bỏ chọn mọi lớp (khi đang sửa chữ, input tự xử lý Escape).
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || brushState.active || inlineTextEdit) return;
+    deselectAllSelections();
+  });
   window.addEventListener('pointerup', flushAutoSave);
   window.addEventListener('pagehide', () => {
     flushAutoSave();
