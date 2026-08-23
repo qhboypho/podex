@@ -25,6 +25,7 @@ const {
   removeIconItem,
   selectDecor,
   toggleDecorLock,
+  duplicateDecorItem,
   isEditableLayer,
   moveOverlay,
   normalizeWorkspaceView,
@@ -354,6 +355,33 @@ test('removing the active decoration clears the selection', () => {
   scene = removeTextItem(scene, id);
   assert.equal(getTextItems(scene).length, 0);
   assert.equal(scene.activeDecor, null);
+});
+
+test('duplicates a text layer with a new id, a small offset and selects the copy', () => {
+  let scene = addTextItem(createScene(), { content: 'CLUB', x: 40, y: 30 });
+  const sourceId = scene.activeDecor.id;
+  scene = duplicateDecorItem(scene, 'text', sourceId);
+  assert.equal(getTextItems(scene).length, 2);
+  const source = findDecorItem(scene, 'text', sourceId);
+  const copy = getTextItems(scene)[1];
+  assert.notEqual(copy.id, sourceId);
+  assert.equal(copy.content, 'CLUB');
+  assert.equal(copy.x, source.x + 3);
+  assert.equal(copy.y, source.y + 3);
+  assert.deepEqual(scene.activeDecor, { type: 'text', id: copy.id });
+});
+
+test('duplicates icon layers and ignores unknown decoration ids', () => {
+  let scene = addIconItem(createScene(), { iconId: 'bolt' });
+  const source = getIconItems(scene)[0];
+  const untouched = duplicateDecorItem(scene, 'icon', 99999);
+  assert.equal(untouched, scene);
+  scene = duplicateDecorItem(scene, 'icon', source.id);
+  assert.equal(getIconItems(scene).length, 2);
+  const copy = getIconItems(scene)[1];
+  assert.equal(copy.iconId, 'bolt');
+  assert.equal(copy.type, 'icon');
+  assert.deepEqual(scene.activeDecor, { type: 'icon', id: copy.id });
 });
 
 test('decorations follow the base transform like artwork overlays do', () => {

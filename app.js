@@ -189,6 +189,11 @@
     decorFontSelect: $('#decorFontSelect'),
     decorIconGrid: $('#decorIconGrid'),
     decorSizeLabel: $('#decorSizeLabel'),
+    decorSizeField: $('#decorSizeField'),
+    decorColorField: $('#decorColorField'),
+    decorRotationField: $('#decorRotationField'),
+    decorOpacityField: $('#decorOpacityField'),
+    decorMultiHint: $('#decorMultiHint'),
     decorSizeRange: $('#decorSizeRange'),
     decorSizeOutput: $('#decorSizeOutput'),
     decorColorPicker: $('#decorColorPicker'),
@@ -517,6 +522,7 @@
 
     // Text & icon decorations: đồng bộ hit-layer ngay, vẽ canvas theo rAF
     syncDecorHitNodes();
+    syncDecorActionBar();
     scheduleDecorPreview();
     syncDecorPanel();
 
@@ -1320,7 +1326,7 @@
     };
 
     element.artboard.addEventListener('click', (event) => {
-      if (event.target.closest('.artwork-overlay, .logo-overlay, .base-selection')) return;
+      if (event.target.closest('.artwork-overlay, .logo-overlay, .base-selection, .decor-hitlayer')) return;
       if (event.target === element.baseImage && element.baseImage.dataset.moved === 'true') {
         element.baseImage.dataset.moved = 'false';
         return;
@@ -2255,11 +2261,70 @@
   let decorHitLayer = null;
   let decorGuideV = null;
   let decorGuideH = null;
+  let decorActionBar = null;
   let decorPreviewPending = false;
   let decorPreviewToken = 0;
   let decorDrag = null;
   let inlineTextEdit = null;
   const _decorHitNodes = new Map();
+  // Chọn nhiều lớp bằng Ctrl/Cmd + click: lưu "type:id" của mọi lớp đang chọn
+  // (bao gồm cả lớp primary). Rỗng = chỉ chọn đơn qua scene.activeDecor.
+  const multiSelectKeys = new Set();
+
+  const decorKeyOf = (selection) => (selection ? `${selection.type}:${selection.id}` : null);
+
+  function isDecorItemSelected(item) {
+    if (multiSelectKeys.size > 0) return multiSelectKeys.has(`${item.type}:${item.id}`);
+    const active = scene.activeDecor;
+    return Boolean(active && active.type === item.type && active.id === item.id);
+  }
+
+  function getSelectedDecorItems() {
+    const all = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
+    if (multiSelectKeys.size > 0) {
+      return all.filter((item) => multiSelectKeys.has(`${item.type}:${item.id}`));
+    }
+    const active = scene.activeDecor;
+    return active ? all.filter((item) => item.type === active.type && item.id === active.id) : [];
+  }
+
+  function pruneMultiSelect() {
+    if (!multiSelectKeys.size) return;
+    const valid = new Set(
+      [...Core.getTextItems(scene), ...Core.getIconItems(scene)]
+        .map((item) => `${item.type}:${item.id}`),
+    );
+    for (const key of [...multiSelectKeys]) {
+      if (!valid.has(key)) multiSelectKeys.delete(key);
+    }
+  }
+
+  function toggleDecorMultiSelect(type, id) {
+    const key = `${type}:${id}`;
+    if (multiSelectKeys.has(key)) {
+      multiSelectKeys.delete(key);
+      if (decorKeyOf(scene.activeDecor) === key) {
+        // Lớp vừa bỏ chọn là primary → chuyển primary sang lớp cuối còn lại.
+        const lastKey = [...multiSelectKeys].pop() || null;
+        const next = lastKey
+          ? { type: lastKey.split(':')[0], id: Number(lastKey.split(':')[1]) }
+          : null;
+        scene = Core.selectDecor(scene, next);
+        if (!next) multiSelectKeys.clear();
+      }
+    } else {
+      // Lần đầu thêm vào nhóm: gieo luôn lớp primary hiện tại vào tập chọn.
+      if (multiSelectKeys.size === 0 && scene.activeDecor) {
+        multiSelectKeys.add(decorKeyOf(scene.activeDecor));
+      }
+      multiSelectKeys.add(key);
+      scene = Core.selectDecor(scene, { type, id });
+    }
+    markDirty();
+    render();
+    const count = multiSelectKeys.size;
+    if (count > 1) setStatus(`Đã chọn ${count} lớp — giữ Ctrl/Cmd + click để bỏ chọn`);
+  }
 
   // Ngưỡng hút snap khi kéo (theo % kích thước artboard).
   const DECOR_SNAP_THRESHOLD = 1.2;
@@ -2285,6 +2350,33 @@
       decorGuideH = document.createElement('div');
       decorGuideH.className = 'decor-guide decor-guide-h';
       element.artboard.appendChild(decorGuideH);
+    }
+    if (!decorActionBar) {
+      decorActionBar = document.createElement('div');
+      decorActionBar.className = 'decor-actionbar hidden';
+      const duplicateButton = document.createElement('button');
+      duplicateButton.type = 'button';
+      duplicateButton.textContent = '⧉ Nhân bản';
+      duplicateButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const selection = scene.activeDecor;
+        if (!selection) return;
+        scene = Core.duplicateDecorItem(scene, selection.type, selection.id);
+        markDirty();
+        render();
+        showToast('Đã nhân bản lớp — bản copy đang được chọn.');
+      });
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.textContent = '✕ Xoá';
+      deleteButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const selection = scene.activeDecor;
+        if (!selection) return;
+        removeDecorItem(selection.type, selection.id);
+      });
+      decorActionBar.append(duplicateButton, deleteButton);
+      decorHitLayer.appendChild(decorActionBar);
     }
   }
 
@@ -2411,9 +2503,9 @@
 
   function syncDecorHitNodes() {
     ensureDecorLayers();
+    pruneMultiSelect();
     const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
     const seen = new Set();
-    const active = scene.activeDecor;
     const aspect = artboardAspectRatio();
     for (const item of items) {
       const key = `${item.type}:${item.id}`;
@@ -2438,8 +2530,7 @@
       const { wPct, hPct } = decorBoxToPercent(hitBox, aspect);
       node.style.width = `${wPct}%`;
       node.style.height = `${hPct}%`;
-      const isActive = active?.type === item.type && active?.id === item.id;
-      node.classList.toggle('selected', Boolean(isActive));
+      node.classList.toggle('selected', isDecorItemSelected(item));
       node.classList.toggle('locked-decor', item.locked);
       // Ẩn node của lớp đang được sửa chữ trực tiếp để không che input.
       const isEditing = inlineTextEdit?.type === 'text' && inlineTextEdit.id === item.id;
@@ -2453,6 +2544,21 @@
     }
   }
 
+  // Menu nổi dưới lớp đang chọn: [Nhân bản] [Xoá]
+  function syncDecorActionBar() {
+    if (!decorActionBar) return;
+    const selection = scene.activeDecor;
+    const item = selection ? Core.findDecorItem(scene, selection.type, selection.id) : null;
+    const show = Boolean(item) && multiSelectKeys.size <= 1 && !brushState.active && !inlineTextEdit;
+    decorActionBar.classList.toggle('hidden', !show);
+    if (!show) return;
+    const rawBox = measureDecorBox(item);
+    const hitBox = rotatedHitBox(rawBox.w, rawBox.h, item.rotation);
+    const { hPct } = decorBoxToPercent(hitBox, artboardAspectRatio());
+    decorActionBar.style.left = `${item.x}%`;
+    decorActionBar.style.top = `${Math.min(item.y + hPct / 2 + 1.4, 92)}%`;
+  }
+
   // ── Kéo thả text/icon trực tiếp trên artboard ─────────────────────────────
   function onDecorHitPointerDown(event) {
     if (event.button !== 0 || brushState.active) return;
@@ -2464,6 +2570,14 @@
     if (!item) return;
     event.stopPropagation();
     event.preventDefault();
+    // Ctrl/Cmd + click: thêm/bỏ lớp khỏi nhóm chọn, không kéo.
+    if (event.ctrlKey || event.metaKey) {
+      toggleDecorMultiSelect(type, id);
+      return;
+    }
+    // Click vào lớp chưa chọn → chọn đơn. Click vào lớp đang thuộc nhóm →
+    // giữ nguyên nhóm để kéo/căn cả nhóm.
+    if (multiSelectKeys.size > 0 && !isDecorItemSelected(item)) multiSelectKeys.clear();
     if (scene.activeDecor?.type !== type || scene.activeDecor?.id !== id) {
       scene = Core.selectDecor(scene, { type, id });
       markDirty();
@@ -2479,6 +2593,10 @@
       startY: event.clientY,
       x: item.x,
       y: item.y,
+      // Vị trí bắt đầu của cả nhóm để kéo nhóm không bị cộng dồn delta.
+      groupStart: multiSelectKeys.size > 1
+        ? new Map(getSelectedDecorItems().map((entry) => [`${entry.type}:${entry.id}`, { x: entry.x, y: entry.y }]))
+        : null,
     };
     node.setPointerCapture(event.pointerId);
   }
@@ -2522,6 +2640,21 @@
     scene = decorDrag.type === 'text'
       ? Core.updateTextItem(scene, { x, y }, decorDrag.id)
       : Core.updateIconItem(scene, { x, y }, decorDrag.id);
+    // Kéo nhóm: mọi lớp đang chọn dịch cùng một khoảng so với vị trí bắt đầu.
+    const deltaX = x - decorDrag.x;
+    const deltaY = y - decorDrag.y;
+    if (decorDrag.groupStart && (deltaX || deltaY)) {
+      const draggedKey = `${decorDrag.type}:${decorDrag.id}`;
+      for (const [key, start] of decorDrag.groupStart) {
+        if (key === draggedKey) continue;
+        const [groupType, groupId] = key.split(':');
+        const groupItem = Core.findDecorItem(scene, groupType, Number(groupId));
+        if (!groupItem || groupItem.locked) continue;
+        scene = groupType === 'text'
+          ? Core.updateTextItem(scene, { x: start.x + deltaX, y: start.y + deltaY }, groupItem.id)
+          : Core.updateIconItem(scene, { x: start.x + deltaX, y: start.y + deltaY }, groupItem.id);
+      }
+    }
     markDirty();
     render();
   });
@@ -2584,6 +2717,8 @@
 
     decorHitLayer.appendChild(input);
     inlineTextEdit = { input, id: item.id, type: 'text', original: String(item.content || '') };
+    // Vẽ lại để ẩn hit-node và action bar của lớp đang sửa.
+    render();
     requestAnimationFrame(() => {
       input.focus();
       input.select();
@@ -2868,6 +3003,7 @@
   }
 
   function addTextToScene(patch = {}) {
+    multiSelectKeys.clear();
     scene = Core.addTextItem(scene, patch);
     markDirty();
     render();
@@ -2876,6 +3012,7 @@
   }
 
   function addIconToScene(patch = {}) {
+    multiSelectKeys.clear();
     scene = Core.addIconItem(scene, { iconId: 'star', ...patch });
     markDirty();
     render();
@@ -2913,7 +3050,7 @@
     ];
     let html = '';
     for (const { type, item } of rows) {
-      const isActive = selection?.type === type && selection?.id === item.id;
+      const isActive = isDecorItemSelected(item);
       const thumb = type === 'text'
         ? '<span>Aa</span>'
         : `<img src="${Icons.getSrc(item.iconId, item.color)}" alt="" />`;
@@ -2932,6 +3069,7 @@
       row.addEventListener('click', (event) => {
         if (event.target.closest('[data-decor-lock], [data-decor-remove]')) return;
         const [type, id] = row.dataset.decorRow.split(':');
+        multiSelectKeys.clear();
         scene = Core.selectDecor(scene, { type, id: Number(id) });
         markDirty();
         render();
@@ -2964,21 +3102,31 @@
     buildDecorIconGrid();
     const selection = scene.activeDecor;
     const item = selection ? Core.findDecorItem(scene, selection.type, selection.id) : null;
-    element.decorEditor.classList.toggle('hidden', !item);
-    element.decorTextControls.style.display = item?.type === 'text' ? '' : 'none';
-    element.decorIconControls.style.display = item?.type === 'icon' ? '' : 'none';
-    element.decorAddText.textContent = '＋ Thêm chữ';
+    const multiCount = multiSelectKeys.size;
+    const isSingle = Boolean(item) && multiCount <= 1;
+    element.decorEditor.classList.toggle('hidden', !item && multiCount === 0);
+    element.decorTextControls.style.display = isSingle && item.type === 'text' ? '' : 'none';
+    element.decorIconControls.style.display = isSingle && item.type === 'icon' ? '' : 'none';
+    // Với nhóm chọn: ẩn control riêng lẻ, chỉ giữ nút căn chỉnh nhóm.
+    [element.decorSizeField, element.decorColorField, element.decorRotationField, element.decorOpacityField]
+      .forEach((field) => { if (field) field.style.display = isSingle ? '' : 'none'; });
+    if (element.decorMultiHint) {
+      element.decorMultiHint.style.display = multiCount > 1 ? '' : 'none';
+      if (multiCount > 1) {
+        element.decorMultiHint.textContent = `Đã chọn ${multiCount} lớp — nút căn chỉnh sẽ xếp mép/tâm cả nhóm (giữ Ctrl/Cmd + click để bỏ chọn).`;
+      }
+    }
     element.decorSizeLabel.textContent = item?.type === 'text' ? 'Cỡ chữ' : 'Cỡ icon';
 
     renderDecorList(Core.getTextItems(scene), Core.getIconItems(scene), selection);
-    if (selection?.type === 'icon') {
+    if (selection?.type === 'icon' && isSingle) {
       element.decorIconGrid.querySelectorAll('.decor-icon-cell').forEach((cell) => {
         cell.querySelector('img').src = Icons.getSrc(cell.dataset.iconId, item?.color || '#17211e');
         cell.classList.toggle('active', item?.iconId === cell.dataset.iconId);
       });
     }
 
-    if (!item) return;
+    if (!isSingle) return;
     const isText = item.type === 'text';
     if (isText) {
       element.decorSizeRange.min = String(Core.MIN_TEXT_FONT_SIZE);
@@ -3045,28 +3193,72 @@
     updateActiveDecor({ opacity: value / 100 });
   });
 
-  // ── Căn chỉnh theo khung: trái/giữa ngang/phải, trên/giữa dọc/dưới ────────
+  // ── Căn chỉnh: 1 lớp → theo khung; nhiều lớp → xếp mép theo nhóm ─────────
   function alignActiveDecor(mode) {
-    const selection = scene.activeDecor;
-    if (!selection) return;
-    const item = Core.findDecorItem(scene, selection.type, selection.id);
-    if (!item || item.locked) return;
-    const rawBox = measureDecorBox(item);
-    const box = rotatedHitBox(rawBox.w, rawBox.h, item.rotation);
-    const { wPct, hPct } = decorBoxToPercent(box, artboardAspectRatio());
+    const selected = getSelectedDecorItems();
+    if (!selected.length) return;
+    const aspect = artboardAspectRatio();
+    const boxes = selected.filter((item) => !item.locked).map((item) => {
+      const rawBox = measureDecorBox(item);
+      const box = rotatedHitBox(rawBox.w, rawBox.h, item.rotation);
+      const { wPct, hPct } = decorBoxToPercent(box, aspect);
+      return {
+        item,
+        wPct,
+        hPct,
+        left: item.x - wPct / 2,
+        right: item.x + wPct / 2,
+        top: item.y - hPct / 2,
+        bottom: item.y + hPct / 2,
+      };
+    });
+    if (!boxes.length) return;
     const inset = 0.6;
-    const patchByMode = {
-      left: { x: wPct / 2 + inset },
-      centerX: { x: 50 },
-      right: { x: 100 - wPct / 2 - inset },
-      top: { y: hPct / 2 + inset },
-      centerY: { y: 50 },
-      bottom: { y: 100 - hPct / 2 - inset },
+
+    if (boxes.length === 1) {
+      // Căn theo khung artboard.
+      const { wPct, hPct } = boxes[0];
+      const patchByMode = {
+        left: { x: wPct / 2 + inset },
+        centerX: { x: 50 },
+        right: { x: 100 - wPct / 2 - inset },
+        top: { y: hPct / 2 + inset },
+        centerY: { y: 50 },
+        bottom: { y: 100 - hPct / 2 - inset },
+      };
+      const patch = patchByMode[mode];
+      if (!patch) return;
+      updateActiveDecor(patch);
+      setStatus(mode.startsWith('center') ? 'Đã căn giữa theo khung' : `Đã căn ${patch.x != null ? 'ngang' : 'dọc'} theo khung`);
+      return;
+    }
+
+    // Nhiều lớp: mép phải trùng mép, tâm trùng tâm của cả nhóm.
+    const minLeft = Math.min(...boxes.map((box) => box.left));
+    const maxRight = Math.max(...boxes.map((box) => box.right));
+    const minTop = Math.min(...boxes.map((box) => box.top));
+    const maxBottom = Math.max(...boxes.map((box) => box.bottom));
+    const centerX = (minLeft + maxRight) / 2;
+    const centerY = (minTop + maxBottom) / 2;
+    const targetByMode = {
+      left: (box) => ({ x: minLeft + box.wPct / 2 }),
+      right: (box) => ({ x: maxRight - box.wPct / 2 }),
+      centerX: () => ({ x: centerX }),
+      top: (box) => ({ y: minTop + box.hPct / 2 }),
+      bottom: (box) => ({ y: maxBottom - box.hPct / 2 }),
+      centerY: () => ({ y: centerY }),
     };
-    const patch = patchByMode[mode];
-    if (!patch) return;
-    updateActiveDecor(patch);
-    setStatus(mode.startsWith('center') ? 'Đã căn giữa theo khung' : `Đã căn ${patch.x != null ? 'ngang' : 'dọc'} theo khung`);
+    const resolve = targetByMode[mode];
+    if (!resolve) return;
+    for (const box of boxes) {
+      const patch = resolve(box);
+      scene = box.item.type === 'text'
+        ? Core.updateTextItem(scene, patch, box.item.id)
+        : Core.updateIconItem(scene, patch, box.item.id);
+    }
+    markDirty();
+    render();
+    setStatus(`Đã căn ${boxes.length} lớp theo nhóm`);
   }
   $$('#decorAlignGroup .decor-align-btn').forEach((button) => {
     button.addEventListener('click', () => alignActiveDecor(button.dataset.decorAlign));
@@ -3332,6 +3524,7 @@
 
   $$('.view-switch button').forEach((button) => button.addEventListener('click', () => {
     scene = Core.selectView(scene, button.dataset.view);
+    multiSelectKeys.clear();
     setMessage(element.artworkMessage, `Đang chỉnh ${scene.view === 'front' ? 'mặt trước' : 'mặt sau'} với artwork riêng.`, 'success');
     setStatus(`Đang chỉnh ${scene.view === 'front' ? 'mặt trước' : 'mặt sau'}`);
     render();

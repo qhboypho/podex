@@ -877,6 +877,19 @@ function toggleDecorLock(scene, type, itemId) {
   };
 }
 
+// Nhân bản một lớp chữ/icon: id mới, lệch nhẹ để thấy rõ bản copy, và chọn bản copy.
+function duplicateDecorItem(scene, type, itemId) {
+  const listKey = getDecorListKey(scene, type);
+  if (!listKey) return scene;
+  const list = scene[listKey];
+  const source = list.find((item) => item.id === itemId);
+  if (!source) return scene;
+  const clone = source.type === 'icon'
+    ? constrainIconItem({ ...source, id: ++_decorIdCounter, x: source.x + 3, y: source.y + 3 })
+    : constrainTextItem({ ...source, id: ++_decorIdCounter, x: source.x + 3, y: source.y + 3 });
+  return { ...scene, [listKey]: [...list, clone], activeDecor: { type, id: clone.id } };
+}
+
 function moveAllDecorItems(items, deltaX, deltaY, constrain) {
   return items.map((item) => constrain({
     ...item,
@@ -927,6 +940,7 @@ globalThis.FormCore = {
   selectDecor,
   selectOverlayById,
   serializeDraft,
+  duplicateDecorItem,
   toggleDecorLock,
   toggleOverlayLock,
   setSafeArea,
