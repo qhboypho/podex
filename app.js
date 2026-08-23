@@ -2253,10 +2253,16 @@
   let decorCanvas = null;
   let decorCtx = null;
   let decorHitLayer = null;
+  let decorGuideV = null;
+  let decorGuideH = null;
   let decorPreviewPending = false;
   let decorPreviewToken = 0;
   let decorDrag = null;
+  let inlineTextEdit = null;
   const _decorHitNodes = new Map();
+
+  // Ngưỡng hút snap khi kéo (theo % kích thước artboard).
+  const DECOR_SNAP_THRESHOLD = 1.2;
 
   function ensureDecorLayers() {
     if (!decorCanvas) {
@@ -2272,10 +2278,79 @@
       decorHitLayer.className = 'decor-hitlayer';
       element.artboard.appendChild(decorHitLayer);
     }
+    if (!decorGuideV) {
+      decorGuideV = document.createElement('div');
+      decorGuideV.className = 'decor-guide decor-guide-v';
+      element.artboard.appendChild(decorGuideV);
+      decorGuideH = document.createElement('div');
+      decorGuideH.className = 'decor-guide decor-guide-h';
+      element.artboard.appendChild(decorGuideH);
+    }
   }
 
   function fontStringForDecor(item, sizePx) {
     return `${item.style || 'normal'} ${sizePx}px "${item.font || 'Arial'}", sans-serif`;
+  }
+
+  // ── Đo khung hiển thị của item theo hệ tham chiếu (400 = 100% bề rộng) ────
+  const _decorMeasureCtx = document.createElement('canvas').getContext('2d');
+
+  function measureDecorBox(item) {
+    if (item.type !== 'text') {
+      return { w: item.size, h: item.size };
+    }
+    const content = String(item.content || '');
+    _decorMeasureCtx.font = fontStringForDecor(item, Math.max(1, item.fontSize));
+    const metrics = _decorMeasureCtx.measureText(content);
+    const hasGlyphs = Boolean(content.trim());
+    const width = hasGlyphs ? metrics.width : 0;
+    let height;
+    if (hasGlyphs
+      && Number.isFinite(metrics.actualBoundingBoxAscent)
+      && Number.isFinite(metrics.actualBoundingBoxDescent)) {
+      height = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    } else {
+      height = item.fontSize * 1.2;
+    }
+    // Nới nhẹ một khoảng đệm để vùng bấm thoải mái hơn.
+    return { w: Math.max(width + item.fontSize * .15, item.fontSize * .8), h: Math.max(height, item.fontSize) };
+  }
+
+  function rotatedHitBox(width, height, rotationDeg) {
+    const angle = Math.abs(Number(rotationDeg) || 0) * Math.PI / 180;
+    const cos = Math.abs(Math.cos(angle));
+    const sin = Math.abs(Math.sin(angle));
+    return { w: width * cos + height * sin, h: width * sin + height * cos };
+  }
+
+  // Đổi khung (đơn vị tham chiếu) sang % trên artboard.
+  function decorBoxToPercent(box, aspectRatio) {
+    return {
+      wPct: (box.w / DECOR_REFERENCE_WIDTH) * 100,
+      // Trục dọc dùng % chiều cao nên phải nhân với tỷ lệ khung.
+      hPct: (box.h / DECOR_REFERENCE_WIDTH) * 100 * aspectRatio,
+    };
+  }
+
+  function artboardAspectRatio() {
+    const rect = element.artboard.getBoundingClientRect();
+    return rect.height > 0 ? rect.width / rect.height : 9 / 16;
+  }
+
+  function showDecorGuides(vPos, hPos) {
+    if (!decorGuideV || !decorGuideH) return;
+    if (vPos == null) {
+      decorGuideV.classList.remove('visible');
+    } else {
+      decorGuideV.style.left = `${vPos}%`;
+      decorGuideV.classList.add('visible');
+    }
+    if (hPos == null) {
+      decorGuideH.classList.remove('visible');
+    } else {
+      decorGuideH.style.top = `${hPos}%`;
+      decorGuideH.classList.add('visible');
+    }
   }
 
   async function drawDecorItem(context, W, H, item) {
@@ -2339,6 +2414,7 @@
     const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
     const seen = new Set();
     const active = scene.activeDecor;
+    const aspect = artboardAspectRatio();
     for (const item of items) {
       const key = `${item.type}:${item.id}`;
       seen.add(key);
@@ -2350,14 +2426,24 @@
         node.dataset.decorType = item.type;
         node.dataset.decorId = String(item.id);
         node.addEventListener('pointerdown', onDecorHitPointerDown);
+        node.addEventListener('dblclick', onDecorHitDblClick);
         decorHitLayer.appendChild(node);
         _decorHitNodes.set(key, node);
       }
       node.style.left = `${item.x}%`;
       node.style.top = `${item.y}%`;
+      // Vùng kéo ôm đúng khung nội dung hiện tại (kể cả khi đang xoay).
+      const rawBox = measureDecorBox(item);
+      const hitBox = rotatedHitBox(rawBox.w, rawBox.h, item.rotation);
+      const { wPct, hPct } = decorBoxToPercent(hitBox, aspect);
+      node.style.width = `${wPct}%`;
+      node.style.height = `${hPct}%`;
       const isActive = active?.type === item.type && active?.id === item.id;
       node.classList.toggle('selected', Boolean(isActive));
       node.classList.toggle('locked-decor', item.locked);
+      // Ẩn node của lớp đang được sửa chữ trực tiếp để không che input.
+      const isEditing = inlineTextEdit?.type === 'text' && inlineTextEdit.id === item.id;
+      node.style.visibility = isEditing ? 'hidden' : '';
     }
     for (const [key, node] of _decorHitNodes) {
       if (!seen.has(key)) {
@@ -2370,6 +2456,7 @@
   // ── Kéo thả text/icon trực tiếp trên artboard ─────────────────────────────
   function onDecorHitPointerDown(event) {
     if (event.button !== 0 || brushState.active) return;
+    if (inlineTextEdit) finishInlineTextEdit(false);
     const node = event.currentTarget;
     const type = node.dataset.decorType;
     const id = Number(node.dataset.decorId);
@@ -2396,10 +2483,42 @@
     node.setPointerCapture(event.pointerId);
   }
 
+  // Tập điểm mốc để hút snap: tâm khung, tâm vùng in, và tâm các lớp khác.
+  function collectDecorSnapTargets(excludeKey) {
+    const xs = [50];
+    const ys = [50];
+    if (Number.isFinite(Number(scene.safeArea?.x))) {
+      xs.push(Number(scene.safeArea.x));
+      ys.push(Number(scene.safeArea.y));
+    }
+    for (const item of [...Core.getTextItems(scene), ...Core.getIconItems(scene)]) {
+      if (`${item.type}:${item.id}` === excludeKey) continue;
+      xs.push(item.x);
+      ys.push(item.y);
+    }
+    const activeOverlay = Core.getActiveOverlay(scene);
+    if (activeOverlay) {
+      xs.push(activeOverlay.x);
+      ys.push(activeOverlay.y);
+    }
+    return { xs, ys };
+  }
+
   window.addEventListener('pointermove', (event) => {
     if (!decorDrag || decorDrag.pointerId !== event.pointerId) return;
-    const x = decorDrag.x + ((event.clientX - decorDrag.startX) / decorDrag.rect.width) * 100;
-    const y = decorDrag.y + ((event.clientY - decorDrag.startY) / decorDrag.rect.height) * 100;
+    let x = decorDrag.x + ((event.clientX - decorDrag.startX) / decorDrag.rect.width) * 100;
+    let y = decorDrag.y + ((event.clientY - decorDrag.startY) / decorDrag.rect.height) * 100;
+    // Snap: hút về đường ngang/dọc mốc gần nhất và hiển thị guide line.
+    const targets = collectDecorSnapTargets(`${decorDrag.type}:${decorDrag.id}`);
+    let guideV = null;
+    let guideH = null;
+    for (const targetX of targets.xs) {
+      if (Math.abs(x - targetX) <= DECOR_SNAP_THRESHOLD) { x = targetX; guideV = targetX; break; }
+    }
+    for (const targetY of targets.ys) {
+      if (Math.abs(y - targetY) <= DECOR_SNAP_THRESHOLD) { y = targetY; guideH = targetY; break; }
+    }
+    showDecorGuides(guideV, guideH);
     scene = decorDrag.type === 'text'
       ? Core.updateTextItem(scene, { x, y }, decorDrag.id)
       : Core.updateIconItem(scene, { x, y }, decorDrag.id);
@@ -2411,9 +2530,77 @@
     const node = _decorHitNodes.get(`${decorDrag.type}:${decorDrag.id}`);
     if (node?.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
     decorDrag = null;
+    showDecorGuides(null, null);
   };
   window.addEventListener('pointerup', stopDecorDrag);
   window.addEventListener('pointercancel', stopDecorDrag);
+
+  // ── Sửa chữ trực tiếp trên workspace (double-click) ───────────────────────
+  function onDecorHitDblClick(event) {
+    const node = event.currentTarget;
+    if (node.dataset.decorType !== 'text' || brushState.active) return;
+    const item = Core.findDecorItem(scene, 'text', Number(node.dataset.decorId));
+    if (!item || item.locked) return;
+    event.stopPropagation();
+    event.preventDefault();
+    startInlineTextEdit(item);
+  }
+
+  function startInlineTextEdit(item) {
+    if (inlineTextEdit) finishInlineTextEdit(false);
+    ensureDecorLayers();
+    const rect = element.artboard.getBoundingClientRect();
+    const cssSize = Math.max(8, item.fontSize * rect.width / DECOR_REFERENCE_WIDTH);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = Core.MAX_DECOR_TEXT_LENGTH;
+    input.value = String(item.content || '');
+    input.className = 'decor-inline-input';
+    input.style.left = `${item.x}%`;
+    input.style.top = `${item.y}%`;
+    input.style.font = fontStringForDecor(item, cssSize);
+    input.style.color = item.color;
+    _decorMeasureCtx.font = fontStringForDecor(item, cssSize);
+    input.style.width = `${Math.max(_decorMeasureCtx.measureText(input.value).width + 28, cssSize * 2)}px`;
+    input.style.transform = `translate(-50%, -50%) rotate(${item.rotation}deg)`;
+
+    input.addEventListener('input', () => {
+      scene = Core.updateTextItem(scene, { content: input.value }, item.id);
+      markDirty();
+      render();
+    });
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finishInlineTextEdit(false);
+        showToast('Đã cập nhật chữ.');
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finishInlineTextEdit(true);
+      }
+    });
+    input.addEventListener('blur', () => finishInlineTextEdit(false));
+
+    decorHitLayer.appendChild(input);
+    inlineTextEdit = { input, id: item.id, type: 'text', original: String(item.content || '') };
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }
+
+  function finishInlineTextEdit(revert = false) {
+    const editing = inlineTextEdit;
+    if (!editing) return;
+    inlineTextEdit = null;
+    if (revert) {
+      scene = Core.updateTextItem(scene, { content: editing.original }, editing.id);
+    }
+    editing.input.remove();
+    markDirty();
+    render();
+  }
 
   async function exportPng() {
     element.exportButton.disabled = true;
@@ -2856,6 +3043,33 @@
     const value = Number(element.decorOpacityRange.value);
     element.decorOpacityOutput.textContent = percentage(value / 100);
     updateActiveDecor({ opacity: value / 100 });
+  });
+
+  // ── Căn chỉnh theo khung: trái/giữa ngang/phải, trên/giữa dọc/dưới ────────
+  function alignActiveDecor(mode) {
+    const selection = scene.activeDecor;
+    if (!selection) return;
+    const item = Core.findDecorItem(scene, selection.type, selection.id);
+    if (!item || item.locked) return;
+    const rawBox = measureDecorBox(item);
+    const box = rotatedHitBox(rawBox.w, rawBox.h, item.rotation);
+    const { wPct, hPct } = decorBoxToPercent(box, artboardAspectRatio());
+    const inset = 0.6;
+    const patchByMode = {
+      left: { x: wPct / 2 + inset },
+      centerX: { x: 50 },
+      right: { x: 100 - wPct / 2 - inset },
+      top: { y: hPct / 2 + inset },
+      centerY: { y: 50 },
+      bottom: { y: 100 - hPct / 2 - inset },
+    };
+    const patch = patchByMode[mode];
+    if (!patch) return;
+    updateActiveDecor(patch);
+    setStatus(mode.startsWith('center') ? 'Đã căn giữa theo khung' : `Đã căn ${patch.x != null ? 'ngang' : 'dọc'} theo khung`);
+  }
+  $$('#decorAlignGroup .decor-align-btn').forEach((button) => {
+    button.addEventListener('click', () => alignActiveDecor(button.dataset.decorAlign));
   });
 
   element.baseLockToggle.addEventListener('click', () => {

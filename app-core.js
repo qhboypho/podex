@@ -900,6 +900,7 @@ globalThis.FormCore = {
   MAX_TEXT_FONT_SIZE,
   MIN_ICON_SIZE,
   MAX_ICON_SIZE,
+  MAX_DECOR_TEXT_LENGTH,
   TEXT_FONTS,
   TEXT_STYLES,
   createScene,
