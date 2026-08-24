@@ -2283,6 +2283,7 @@
   let decorPreviewPending = false;
   let decorPreviewToken = 0;
   let decorDrag = null;
+  let decorResize = null;
   let inlineTextEdit = null;
   const _decorHitNodes = new Map();
   // Chọn nhiều lớp bằng Ctrl/Cmd + click: lưu "type:id" của mọi lớp đang chọn
@@ -2593,9 +2594,20 @@
         node.dataset.decorId = String(item.id);
         node.addEventListener('pointerdown', onDecorHitPointerDown);
         node.addEventListener('dblclick', onDecorHitDblClick);
+        // Bốn góc kéo đổi kích thước (giữ tâm, giống artwork).
+        for (const corner of ['nw', 'ne', 'sw', 'se']) {
+          const handle = document.createElement('button');
+          handle.type = 'button';
+          handle.className = 'decor-handle';
+          handle.dataset.decorHandle = corner;
+          handle.setAttribute('aria-label', `Đổi kích thước từ góc ${corner}`);
+          handle.addEventListener('pointerdown', onDecorHandlePointerDown);
+          node.appendChild(handle);
+        }
         decorHitLayer.appendChild(node);
         _decorHitNodes.set(key, node);
       }
+      node.style.setProperty('--decor-control-scale', String(1 / workspaceView.zoom));
       node.style.left = `${item.x}%`;
       node.style.top = `${item.y}%`;
       // Vùng kéo ôm đúng khung nội dung hiện tại (kể cả khi đang xoay).
@@ -2741,6 +2753,57 @@
   };
   window.addEventListener('pointerup', stopDecorDrag);
   window.addEventListener('pointercancel', stopDecorDrag);
+
+  // ── Kéo góc đổi kích thước text/icon (giữ tâm cố định) ────────────────────
+  function onDecorHandlePointerDown(event) {
+    if (event.button !== 0 || brushState.active) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const node = event.currentTarget.closest('.decor-hit');
+    if (!node) return;
+    const type = node.dataset.decorType;
+    const id = Number(node.dataset.decorId);
+    const item = Core.findDecorItem(scene, type, id);
+    if (!item || item.locked) return;
+    if (!isDecorItemSelected(item)) {
+      multiSelectKeys.clear();
+      scene = Core.selectDecor(scene, { type, id });
+      markDirty();
+      render();
+    }
+    const rect = element.artboard.getBoundingClientRect();
+    decorResize = {
+      pointerId: event.pointerId,
+      type,
+      id,
+      center: {
+        x: rect.left + rect.width * item.x / 100,
+        y: rect.top + rect.height * item.y / 100,
+      },
+      startDistance: Math.max(8, Math.hypot(event.clientX - (rect.left + rect.width * item.x / 100), event.clientY - (rect.top + rect.height * item.y / 100))),
+      startSize: item.type === 'text' ? item.fontSize : item.size,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  window.addEventListener('pointermove', (event) => {
+    if (!decorResize || decorResize.pointerId !== event.pointerId) return;
+    const distance = Math.max(8, Math.hypot(event.clientX - decorResize.center.x, event.clientY - decorResize.center.y));
+    const nextSize = Math.round(decorResize.startSize * distance / decorResize.startDistance);
+    scene = decorResize.type === 'text'
+      ? Core.updateTextItem(scene, { fontSize: nextSize }, decorResize.id)
+      : Core.updateIconItem(scene, { size: nextSize }, decorResize.id);
+    markDirty();
+    render();
+  });
+  const stopDecorResize = (event) => {
+    if (!decorResize || decorResize.pointerId !== event.pointerId) return;
+    const handle = event.target;
+    if (handle?.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    decorResize = null;
+  };
+  window.addEventListener('pointerup', stopDecorResize);
+  window.addEventListener('pointercancel', stopDecorResize);
 
   // ── Sửa chữ trực tiếp trên workspace (double-click) ───────────────────────
   function onDecorHitDblClick(event) {

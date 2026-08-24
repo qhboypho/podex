@@ -28,6 +28,13 @@
     .decor-hit.selected{border-style:solid;border-color:var(--accent);box-shadow:0 0 0 2px rgba(197,74,46,.25);background:rgba(255,244,240,.28)}
     .decor-hit.locked-decor{cursor:not-allowed;border-color:#9aa89f}
     .artboard.brush-active .decor-hitlayer{display:none}
+    .decor-handle{position:absolute;width:11px;height:11px;padding:0;border:2px solid var(--accent);border-radius:2px;background:#fff;box-shadow:0 1px 4px rgba(23,33,30,.28);touch-action:none;display:none;transform:scale(var(--decor-control-scale,1))}
+    .decor-handle[data-decor-handle="nw"]{left:-6px;top:-6px;cursor:nwse-resize}
+    .decor-handle[data-decor-handle="ne"]{right:-6px;top:-6px;cursor:nesw-resize}
+    .decor-handle[data-decor-handle="sw"]{left:-6px;bottom:-6px;cursor:nesw-resize}
+    .decor-handle[data-decor-handle="se"]{right:-6px;bottom:-6px;cursor:nwse-resize}
+    .decor-hit:hover .decor-handle,.decor-hit.selected .decor-handle{display:block}
+    .decor-hit.locked-decor .decor-handle{display:none!important}
     .decor-inline-input{position:absolute;z-index:8;min-width:60px;background:rgba(255,255,255,.82);border:1px dashed var(--accent);border-radius:4px;outline:none;text-align:center;padding:2px 4px;font-weight:700;transform-origin:center;color:var(--ink)}
     .decor-guide{position:absolute;display:none;pointer-events:none;z-index:7}
     .decor-guide-v{top:0;bottom:0;width:0;border-left:1px dashed var(--accent)}
