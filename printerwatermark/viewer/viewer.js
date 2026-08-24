@@ -113,19 +113,27 @@ async function loadPdfDataUrl(dataUrl, name) {
   await loadPdfBytes(dataUrlToBytes(dataUrl), name);
 }
 
+let lastFailedUrl = '';
+
+function showLoadError(url, msg) {
+  lastFailedUrl = url;
+  showDropzone(true);
+  $('#loadError').classList.remove('hidden');
+  $('#loadErrorMsg').textContent = msg || 'Lỗi không rõ';
+}
+
 async function loadPdfUrl(url) {
+  $('#loadError').classList.add('hidden');
   setBusy('Đang tải PDF...');
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'PW_FETCH_PDF', url });
     if (resp && resp.ok) {
       await loadPdfDataUrl(resp.data, guessNameFromUrl(url));
     } else {
-      showDropzone(true);
-      toast('Không tải được PDF: ' + ((resp && resp.error) || 'lỗi không rõ'));
+      showLoadError(url, (resp && resp.error) || 'Lỗi không rõ');
     }
   } catch (e) {
-    showDropzone(true);
-    toast('Không tải được PDF.');
+    showLoadError(url, String(e && e.message || e));
   }
   setBusy(null);
 }
@@ -150,6 +158,16 @@ async function initFromParams() {
       }
     } catch (e) { /* ignore */ }
   } else if (src === 'url') {
+    const id = q.get('id');
+    if (id) {
+      try {
+        const resp = await chrome.runtime.sendMessage({ type: 'PW_GET_PDF_URL', id });
+        if (resp && resp.ok && resp.url) {
+          await loadPdfUrl(resp.url);
+          return;
+        }
+      } catch (e) { /* ignore */ }
+    }
     const url = q.get('url') || '';
     if (url) { await loadPdfUrl(decodeURIComponent(url)); return; }
   }
@@ -160,7 +178,10 @@ async function initFromParams() {
 function showDropzone(show) {
   $('#dropzone').classList.toggle('hidden', !show);
   $('#pages').classList.toggle('hidden', show);
-  if (!show) $('#dropzone').classList.add('hidden');
+  if (!show) {
+    $('#dropzone').classList.add('hidden');
+    $('#loadError').classList.add('hidden');
+  }
   if (show) {
     $('#docName').textContent = 'Chưa có file PDF';
     $('#docPages').textContent = '';
@@ -826,6 +847,13 @@ function wireEvents() {
   $('#zoomFit').onclick = () => { zoom = 'fit'; applyZoom(); };
 
   window.addEventListener('resize', () => { if (zoom === 'fit') applyZoom(); });
+
+  $('#btnRetry').addEventListener('click', () => {
+    if (lastFailedUrl) loadPdfUrl(lastFailedUrl);
+  });
+  $('#btnOpenNormal').addEventListener('click', () => {
+    if (lastFailedUrl) chrome.tabs.create({ url: lastFailedUrl });
+  });
 
   const stage = $('#stage');
   stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('dragover'); });

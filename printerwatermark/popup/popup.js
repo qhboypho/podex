@@ -25,8 +25,15 @@ document.getElementById('openViewer').addEventListener('click', () => {
     if (resp && resp.ok && resp.isPdf) {
       pdfAction.classList.remove('hidden');
       stampBtn.addEventListener('click', async () => {
-        await chrome.runtime.sendMessage({ type: 'PW_STAMP_TAB', tabId: tab.id, url: resp.url || tab.url });
-        window.close();
+        stampBtn.disabled = true;
+        stampBtn.textContent = 'Đang mở...';
+        try {
+          await chrome.runtime.sendMessage({ type: 'PW_STAMP_TAB', tabId: tab.id, url: resp.url || tab.url });
+          window.close();
+        } catch (e) {
+          stampBtn.textContent = 'Lỗi: ' + (e && e.message || 'thử lại');
+          stampBtn.disabled = false;
+        }
       });
     }
   } catch (e) {

@@ -40,6 +40,15 @@
           tab PDF sẽ tự mở bằng trình này để đóng dấu watermark trước khi in.</p>
         </div>
       </div>
+      <div id="loadError" class="hidden">
+        <h2>Không tải được PDF từ link này</h2>
+        <p id="loadErrorMsg" class="err-msg"></p>
+        <div class="err-actions">
+          <button id="btnRetry" class="tb-btn primary">Thử lại</button>
+          <button id="btnOpenNormal" class="tb-btn">Mở link bằng tab thường</button>
+        </div>
+        <p class="err-hint">Hoặc kéo thả file PDF vào đây / bấm "Chọn PDF" ở thanh trên để in thủ công.</p>
+      </div>
       <div id="pages" class="hidden"></div>
     </section>
 
