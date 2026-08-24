@@ -26,6 +26,8 @@ const {
   selectDecor,
   toggleDecorLock,
   toggleDecorHidden,
+  groupDecorItems,
+  ungroupDecorItems,
   duplicateDecorItem,
   isEditableLayer,
   moveOverlay,
@@ -398,6 +400,51 @@ test('toggles the hidden flag of a decoration and persists it in drafts', () => 
   scene = toggleDecorHidden(scene, 'text', id);
   const restored = applyDraft(createScene(), serializeDraft(scene));
   assert.equal(restored.textItems[0].hidden, true);
+});
+
+test('Ctrl+G grouping assigns one groupId and persists across drafts', () => {
+  let scene = createScene();
+  scene = addTextItem(scene);
+  scene = addIconItem(scene);
+  const selections = [
+    { type: 'text', id: getTextItems(scene)[0].id },
+    { type: 'icon', id: getIconItems(scene)[0].id },
+  ];
+  const untouched = groupDecorItems(scene, selections.slice(0, 1));
+  assert.equal(untouched, scene, 'nhóm cần tối thiểu 2 lớp');
+  scene = groupDecorItems(scene, selections);
+  const groupId = getTextItems(scene)[0].groupId;
+  assert.equal(groupId, getIconItems(scene)[0].groupId);
+  const restored = applyDraft(createScene(), serializeDraft(scene));
+  assert.equal(restored.textItems[0].groupId, groupId);
+  assert.equal(restored.iconItems[0].groupId, groupId);
+});
+
+test('ungroup clears groupId only for the selected members', () => {
+  let scene = createScene();
+  scene = addTextItem(scene);
+  scene = addTextItem(scene);
+  const [first, second] = getTextItems(scene);
+  scene = groupDecorItems(scene, [
+    { type: 'text', id: first.id },
+    { type: 'text', id: second.id },
+  ]);
+  scene = ungroupDecorItems(scene, [{ type: 'text', id: first.id }]);
+  assert.equal(findDecorItem(scene, 'text', first.id).groupId, null);
+  assert.equal(findDecorItem(scene, 'text', second.id).groupId, null, 'nhóm còn 1 thành viên tự giải tán');
+});
+
+test('removing a group member dissolves a two-member group', () => {
+  let scene = createScene();
+  scene = addTextItem(scene);
+  scene = addTextItem(scene);
+  const [first, second] = getTextItems(scene);
+  scene = groupDecorItems(scene, [
+    { type: 'text', id: first.id },
+    { type: 'text', id: second.id },
+  ]);
+  scene = removeTextItem(scene, first.id);
+  assert.equal(findDecorItem(scene, 'text', second.id).groupId, null);
 });
 
 test('decorations follow the base transform like artwork overlays do', () => {

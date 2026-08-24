@@ -148,6 +148,8 @@ const createOverlay = (side) => ({
 
 // Text & icon dùng chung một dãy id để selection (type, id) luôn duy nhất.
 let _decorIdCounter = 0;
+// Dãy id riêng cho nhóm (Ctrl+G), bắt đầu từ 1.
+let _decorGroupIdCounter = 0;
 
 function constrainTextItem(item) {
   return {
@@ -159,6 +161,7 @@ function constrainTextItem(item) {
     opacity: clamp(number(item.opacity, 1), 0.05, 1),
     locked: Boolean(item.locked),
     hidden: Boolean(item.hidden),
+    groupId: normalizeGroupId(item.groupId),
     content: String(item.content ?? '').slice(0, MAX_DECOR_TEXT_LENGTH),
     font: TEXT_FONTS.includes(item.font) ? item.font : 'Arial',
     style: TEXT_STYLES.includes(item.style) ? item.style : 'bold',
@@ -176,9 +179,16 @@ function constrainIconItem(item) {
     opacity: clamp(number(item.opacity, 1), 0.05, 1),
     locked: Boolean(item.locked),
     hidden: Boolean(item.hidden),
+    groupId: normalizeGroupId(item.groupId),
     iconId: String(item.iconId || ''),
     color: normalizeHexColor(item.color, '#17211e'),
   };
+}
+
+// Nhóm (Ctrl+G): id nhóm bắt đầu từ 1 để tránh nhầm với falsy 0.
+function normalizeGroupId(value) {
+  const parsed = Number(value);
+  return value != null && Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : null;
 }
 
 const createTextItem = (side, patch = {}) => constrainTextItem({
@@ -525,6 +535,7 @@ function plainDecorItem(item) {
     opacity: item.opacity,
     locked: item.locked || false,
     hidden: item.hidden || false,
+    groupId: item.groupId ?? null,
     ...(item.type === 'text'
       ? { content: item.content, font: item.font, style: item.style, fontSize: item.fontSize, color: item.color }
       : { iconId: item.iconId, size: item.size, color: item.color }),
@@ -789,6 +800,21 @@ function resolveDecorSelection(scene, selection) {
   return item ? { type: selection.type, id: item.id } : null;
 }
 
+// Chuẩn hoá một danh sách lựa chọn (text/icon) — bỏ phần tử không hợp lệ, trùng lặp.
+function normalizeDecorSelections(scene, selections) {
+  const seen = new Set();
+  const out = [];
+  for (const selection of selections || []) {
+    const resolved = resolveDecorSelection(scene, selection);
+    if (!resolved) continue;
+    const key = `${resolved.type}:${resolved.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(resolved);
+  }
+  return out;
+}
+
 function findDecorItem(scene, type, id) {
   return getDecorList(scene, type).find((entry) => entry.id === id) || null;
 }
@@ -848,7 +874,7 @@ function removeTextItem(scene, itemId) {
   if (!list.some((item) => item.id === itemId)) return scene;
   return {
     ...scene,
-    [listKey]: list.filter((item) => item.id !== itemId),
+    [listKey]: pruneSingletonGroups(list.filter((item) => item.id !== itemId)),
     activeDecor: scene.activeDecor?.type === 'text' && scene.activeDecor.id === itemId
       ? null
       : scene.activeDecor,
@@ -862,7 +888,7 @@ function removeIconItem(scene, itemId) {
   if (!list.some((item) => item.id === itemId)) return scene;
   return {
     ...scene,
-    [listKey]: list.filter((item) => item.id !== itemId),
+    [listKey]: pruneSingletonGroups(list.filter((item) => item.id !== itemId)),
     activeDecor: scene.activeDecor?.type === 'icon' && scene.activeDecor.id === itemId
       ? null
       : scene.activeDecor,
@@ -890,6 +916,53 @@ function toggleDecorHidden(scene, type, itemId) {
     ...scene,
     [listKey]: list.map((item) => (item.id === itemId ? { ...item, hidden: !item.hidden } : item)),
   };
+}
+
+// ── Nhóm (Ctrl+G) ─────────────────────────────────────────────────────────
+// Thành viên cùng groupId (cùng mặt) di chuyển và phân bố như một khối.
+
+function groupDecorItems(scene, selections) {
+  const valid = normalizeDecorSelections(scene, selections);
+  if (valid.length < 2) return scene;
+  const groupId = ++_decorGroupIdCounter;
+  const keys = new Set(valid.map((sel) => `${sel.type}:${sel.id}`));
+  const apply = (items) => items.map((item) => (keys.has(`${item.type}:${item.id}`) ? { ...item, groupId } : item));
+  return {
+    ...scene,
+    textItems: apply(scene.textItems || []),
+    backTextItems: apply(scene.backTextItems || []),
+    iconItems: apply(scene.iconItems || []),
+    backIconItems: apply(scene.backIconItems || []),
+  };
+}
+
+function ungroupDecorItems(scene, selections) {
+  const valid = normalizeDecorSelections(scene, selections);
+  if (!valid.length) return scene;
+  // Tách nhóm theo kiểu Figma: ungroup một thành viên giải tán cả nhóm chứa nó.
+  const groupIds = new Set();
+  for (const sel of valid) {
+    const item = findDecorItem(scene, sel.type, sel.id);
+    if (item?.groupId) groupIds.add(item.groupId);
+  }
+  if (!groupIds.size) return scene;
+  const apply = (items) => items.map((item) => (item.groupId && groupIds.has(item.groupId) ? { ...item, groupId: null } : item));
+  return {
+    ...scene,
+    textItems: apply(scene.textItems || []),
+    backTextItems: apply(scene.backTextItems || []),
+    iconItems: apply(scene.iconItems || []),
+    backIconItems: apply(scene.backIconItems || []),
+  };
+}
+
+// Nhóm còn duy nhất 1 thành viên (sau khi xóa) thì giải tán.
+function pruneSingletonGroups(items) {
+  const counts = new Map();
+  for (const item of items) {
+    if (item.groupId) counts.set(item.groupId, (counts.get(item.groupId) || 0) + 1);
+  }
+  return items.map((item) => (item.groupId && counts.get(item.groupId) < 2 ? { ...item, groupId: null } : item));
 }
 
 // Nhân bản một lớp chữ/icon: id mới, lệch nhẹ để thấy rõ bản copy, và chọn bản copy.
@@ -958,6 +1031,8 @@ globalThis.FormCore = {
   duplicateDecorItem,
   toggleDecorLock,
   toggleDecorHidden,
+  groupDecorItems,
+  ungroupDecorItems,
   toggleOverlayLock,
   setSafeArea,
   selectView,

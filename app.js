@@ -2674,6 +2674,17 @@
       render();
     }
     if (item.locked) return;
+    // Tập lớp di chuyển cùng: nhóm multi-select, hoặc cả group (Ctrl+G) của lớp bị kéo.
+    let moveKeys = null;
+    if (multiSelectKeys.size > 1) {
+      moveKeys = new Set(multiSelectKeys);
+    } else if (item.groupId) {
+      moveKeys = new Set(
+        [...Core.getTextItems(scene), ...Core.getIconItems(scene)]
+          .filter((member) => member.groupId === item.groupId && !member.hidden)
+          .map((member) => `${member.type}:${member.id}`),
+      );
+    }
     decorDrag = {
       pointerId: event.pointerId,
       type,
@@ -2684,8 +2695,12 @@
       x: item.x,
       y: item.y,
       // Vị trí bắt đầu của cả nhóm để kéo nhóm không bị cộng dồn delta.
-      groupStart: multiSelectKeys.size > 1
-        ? new Map(getSelectedDecorItems().map((entry) => [`${entry.type}:${entry.id}`, { x: entry.x, y: entry.y }]))
+      groupStart: moveKeys && moveKeys.size > 1
+        ? new Map([...moveKeys].map((key) => {
+          const [memberType, memberId] = key.split(':');
+          const member = Core.findDecorItem(scene, memberType, Number(memberId));
+          return [key, { x: member.x, y: member.y }];
+        }))
         : null,
     };
     node.setPointerCapture(event.pointerId);
@@ -3224,7 +3239,7 @@
         + `<button class="artwork-item-eye${item.hidden ? ' is-hidden' : ''}" data-decor-eye="${type}:${item.id}" type="button" title="${item.hidden ? 'Hiện layer' : 'Ẩn layer'}">${eyeSvg}</button>`
         + `<div class="decor-item-thumb">${thumb}</div>`
         + `<div class="artwork-item-info"><span class="artwork-item-name">${escapeHtml(title)}</span>`
-        + `<span class="artwork-item-meta">${type === 'text' ? `${item.font} · ${item.fontSize}px` : 'Icon'}${item.locked ? ' · 🔒' : ''}</span></div>`
+        + `<span class="artwork-item-meta">${type === 'text' ? `${item.font} · ${item.fontSize}px` : 'Icon'}${item.groupId ? ' · 🔗 Nhóm' : ''}${item.locked ? ' · 🔒' : ''}</span></div>`
         + `<button class="artwork-item-lock" data-decor-lock="${type}:${item.id}" type="button" title="${item.locked ? 'Mở khóa' : 'Khóa'}">${item.locked ? '🔒' : '🔓'}</button>`
         + `<button class="artwork-item-remove" data-decor-remove="${type}:${item.id}" type="button" title="Xóa">✕</button>`
         + `</div>`;
@@ -3286,7 +3301,7 @@
     if (element.decorMultiHint) {
       element.decorMultiHint.style.display = multiCount > 1 ? '' : 'none';
       if (multiCount > 1) {
-        element.decorMultiHint.textContent = `Đã chọn ${multiCount} lớp — nút căn chỉnh sẽ xếp mép/tâm cả nhóm (giữ Ctrl/Cmd + click để bỏ chọn).`;
+        element.decorMultiHint.textContent = `Đã chọn ${multiCount} lớp — nút căn chỉnh xếp mép/tâm nhóm, 2 nút cuối phân bố đều (≥3 lớp). Ctrl+G để nhóm, Ctrl+Shift+G để tách.`;
       }
     }
     element.decorSizeLabel.textContent = item?.type === 'text' ? 'Cỡ chữ' : 'Cỡ icon';
@@ -3366,6 +3381,37 @@
     updateActiveDecor({ opacity: value / 100 });
   });
 
+  // ── Nhóm / tách nhóm (Ctrl+G / Ctrl+Shift+G) ──────────────────────────────
+  function groupSelected() {
+    const selection = getSelectedDecorItems();
+    if (selection.length < 2) {
+      showToast('Chọn từ 2 lớp (Ctrl/Cmd + click) rồi bấm Ctrl+G để nhóm.', 'error');
+      return;
+    }
+    scene = Core.groupDecorItems(scene, selection.map((item) => ({ type: item.type, id: item.id })));
+    markDirty();
+    render();
+    showToast(`Đã nhóm ${selection.length} lớp — kéo 1 lớp sẽ di chuyển cả nhóm.`);
+  }
+
+  function ungroupSelected() {
+    const selection = getSelectedDecorItems();
+    if (!selection.length) return;
+    scene = Core.ungroupDecorItems(scene, selection.map((item) => ({ type: item.type, id: item.id })));
+    markDirty();
+    render();
+    showToast('Đã tách nhóm.');
+  }
+
+  window.addEventListener('keydown', (event) => {
+    if (brushState.active || inlineTextEdit) return;
+    if (!(event.ctrlKey || event.metaKey)) return;
+    if (event.key.toLowerCase() !== 'g') return;
+    event.preventDefault();
+    if (event.shiftKey) ungroupSelected();
+    else groupSelected();
+  });
+
   // ── Căn chỉnh: 1 lớp → theo khung; nhiều lớp → xếp mép theo nhóm ─────────
   function alignActiveDecor(mode) {
     const selected = getSelectedDecorItems();
@@ -3387,6 +3433,34 @@
     });
     if (!boxes.length) return;
     const inset = 0.6;
+
+    // ── Phân bố đều (cần ≥3 lớp): khoảng hở giữa các mép bằng nhau ──────────
+    if (mode === 'distributeY' || mode === 'distributeX') {
+      if (boxes.length < 3) {
+        showToast('Phân bố đều cần chọn từ 3 lớp.', 'error');
+        return;
+      }
+      const vertical = mode === 'distributeY';
+      const sorted = [...boxes].sort((a, b) => (vertical ? a.top - b.top : a.left - b.left));
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      const span = vertical ? last.bottom - first.top : last.right - first.left;
+      const totalSize = sorted.reduce((sum, box) => sum + (vertical ? box.hPct : box.wPct), 0);
+      const gap = (span - totalSize) / (sorted.length - 1);
+      let cursor = vertical ? first.top : first.left;
+      for (const box of sorted) {
+        const size = vertical ? box.hPct : box.wPct;
+        const patch = vertical ? { y: cursor + size / 2 } : { x: cursor + size / 2 };
+        scene = box.item.type === 'text'
+          ? Core.updateTextItem(scene, patch, box.item.id)
+          : Core.updateIconItem(scene, patch, box.item.id);
+        cursor += size + gap;
+      }
+      markDirty();
+      render();
+      setStatus(`Đã phân bố đều ${sorted.length} lớp ${vertical ? 'theo chiều dọc' : 'theo chiều ngang'}`);
+      return;
+    }
 
     if (boxes.length === 1) {
       // Căn theo khung artboard.
