@@ -3,6 +3,7 @@
 
   const Core = globalThis.FormCore;
   const DraftStore = globalThis.FormDraftStore;
+  const BaseLibrary = globalThis.FormBaseLibrary;
   const FabricEngine = globalThis.FormFabricEngine;
   const ChromaKey = globalThis.FormChromaKey;
   const Icons = globalThis.FormIcons;
@@ -43,6 +44,9 @@
     baseSelection: $('#baseSelection'),
     baseHandles: $$('#baseSelection [data-base-handle]'),
     baseThumbnail: $('#baseThumbnail'),
+    baseLibraryGrid: $('#baseLibraryGrid'),
+    baseLibraryCount: $('#baseLibraryCount'),
+    baseLibraryMessage: $('#baseLibraryMessage'),
     baseLockToggle: $('#baseLockToggle'),
     baseLockLabel: $('#baseLockLabel'),
     clearDraft: $('#clearDraft'),
@@ -230,6 +234,14 @@
   let autoSaveTimer = 0;
   let workspaceRevision = 0;
   const AUTO_SAVE_DELAY = 180;
+
+  // ─── Thư viện phôi ────────────────────────────────────────────────────────
+  // Mỗi entry: { id, name, blob, metadata, transform, safeArea }. Lớp đang
+  // dùng thuộc thư viện được đánh dấu bằng currentLibraryBaseId để tự lưu
+  // transform/safeArea mỗi lần người dùng chỉnh.
+  let libraryEntries = [];
+  let currentLibraryBaseId = null;
+  const libraryUrls = new Map();
 
   // ─── Blend/fabric params (live + export) ─────────────────────────────────
   const blendParams = {
@@ -796,6 +808,7 @@
       savedAt: Date.now(),
       draft: Core.serializeDraft(scene),
       viewport: workspaceView,
+      baseLibraryId: currentLibraryBaseId,
       assets: {
         base: fileBlobs.base,
         background: fileBlobs.background,
@@ -838,6 +851,7 @@
         scheduleAutoSave();
         return false;
       }
+      void syncCurrentBaseToLibrary();
       draftDirty = false;
       const time = formatSavedTime();
       stampDraft(`${silent ? 'ĐÃ TỰ LƯU' : 'ĐÃ LƯU'} ${time}`);
@@ -892,6 +906,7 @@
     try {
       const stored = await DraftStore.load();
       if (!stored || (stored.version !== 1 && stored.version !== 2) || !stored.draft) return;
+      currentLibraryBaseId = stored.baseLibraryId ?? null;
       const assets = stored.assets || {};
       const base = await restoreAsset('base', assets.base);
       const background = await restoreAsset('background', assets.background);
@@ -948,6 +963,126 @@
     }
   }
 
+  // ── Thư viện phôi: tải danh sách, render grid, áp vào workspace ───────────
+  async function loadBaseLibrary() {
+    if (!BaseLibrary) return;
+    try {
+      libraryEntries = await BaseLibrary.listBases();
+    } catch {
+      libraryEntries = [];
+    }
+    renderBaseLibrary();
+  }
+
+  function libraryThumbUrl(entry) {
+    if (!libraryUrls.has(entry.id)) {
+      libraryUrls.set(entry.id, URL.createObjectURL(entry.blob));
+    }
+    return libraryUrls.get(entry.id);
+  }
+
+  function renderBaseLibrary() {
+    if (!element.baseLibraryGrid) return;
+    element.baseLibraryCount.textContent = libraryEntries.length ? `· ${libraryEntries.length}` : '';
+    if (!libraryEntries.length) {
+      element.baseLibraryGrid.innerHTML = '<div class="base-library-empty">Chưa có phôi trong thư viện — tải phôi lên để lưu cho lần sau.</div>';
+      return;
+    }
+    let html = '';
+    for (const entry of libraryEntries) {
+      html += `<button class="base-library-item${entry.id === currentLibraryBaseId ? ' active' : ''}" data-library-id="${entry.id}" type="button" title="${escapeHtml(entry.name)}">`
+        + `<img src="${libraryThumbUrl(entry)}" alt="" />`
+        + `<span class="base-library-name">${entry.transform ? '✓ ' : ''}${escapeHtml(entry.name)}</span>`
+        + `<span class="base-library-remove" data-library-remove="${entry.id}" title="Xóa khỏi thư viện">✕</span>`
+        + `</button>`;
+    }
+    element.baseLibraryGrid.innerHTML = html;
+
+    element.baseLibraryGrid.querySelectorAll('.base-library-item').forEach((item) => {
+      item.addEventListener('click', (event) => {
+        if (event.target.closest('[data-library-remove]')) return;
+        const entry = libraryEntries.find((candidate) => String(candidate.id) === item.dataset.libraryId);
+        if (entry) void applyLibraryBase(entry);
+      });
+    });
+    element.baseLibraryGrid.querySelectorAll('[data-library-remove]').forEach((button) => {
+      button.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const id = button.dataset.libraryRemove;
+        if (String(currentLibraryBaseId) === id) currentLibraryBaseId = null;
+        libraryEntries = libraryEntries.filter((entry) => String(entry.id) !== id);
+        const url = libraryUrls.get(id);
+        if (url) { URL.revokeObjectURL(url); libraryUrls.delete(id); }
+        try { await BaseLibrary.deleteBase(id); } catch {}
+        renderBaseLibrary();
+        showToast('Đã xóa phôi khỏi thư viện.');
+      });
+    });
+  }
+
+  // Lưu transform + safeArea hiện tại vào entry của phôi đang dùng (nếu có).
+  async function syncCurrentBaseToLibrary() {
+    if (!currentLibraryBaseId || !BaseLibrary) return;
+    try {
+      await BaseLibrary.updateBase(currentLibraryBaseId, {
+        transform: { ...scene.baseTransform },
+        safeArea: { ...scene.safeArea },
+      });
+      const entry = libraryEntries.find((candidate) => candidate.id === currentLibraryBaseId);
+      if (entry) {
+        entry.transform = { ...scene.baseTransform };
+        entry.safeArea = { ...scene.safeArea };
+      }
+    } catch {}
+  }
+
+  async function addBaseToLibrary(file, metadata) {
+    if (!BaseLibrary) return null;
+    const entry = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      name: file.name,
+      blob: file,
+      metadata,
+      transform: null,
+      safeArea: null,
+    };
+    try {
+      await BaseLibrary.saveBase(entry);
+      libraryEntries = [...libraryEntries, entry];
+      currentLibraryBaseId = entry.id;
+      renderBaseLibrary();
+      return entry;
+    } catch {
+      return null;
+    }
+  }
+
+  async function applyLibraryBase(entry) {
+    // Lưu chỉnh sửa của phôi hiện tại trước khi chuyển.
+    await syncCurrentBaseToLibrary();
+    const url = URL.createObjectURL(entry.blob);
+    scene = Core.setBase(scene, { name: entry.name, src: url, metadata: entry.metadata });
+    replaceObjectUrl('base', url);
+    fileBlobs.base = { blob: entry.blob, name: entry.name, metadata: entry.metadata };
+    garmentDispCache = null;
+    destroyMask();
+    currentLibraryBaseId = entry.id;
+    if (entry.transform) {
+      // Phôi này đã từng được chỉnh → đưa về đúng vị trí/kích thước đã lưu.
+      scene = Core.setBaseTransform(scene, entry.transform, { moveAttached: false });
+      if (entry.safeArea) {
+        scene = Core.setSafeArea(scene, { ...entry.safeArea });
+      }
+      setMessage(element.baseMessage, `Đã chuyển sang "${entry.name}" với vị trí/kích thước đã lưu.`, 'success');
+    } else {
+      setMessage(element.baseMessage, `Đã chuyển sang "${entry.name}". Chỉnh vị trí/kích thước — sẽ được nhớ cho lần sau.`, 'success');
+    }
+    markDirty();
+    renderBaseLibrary();
+    render();
+    setStatus('Đã đổi phôi từ thư viện');
+  }
+
   async function uploadImage(file, kind) {
     const target = typeMessageTarget(kind);
     const validation = Core.validateImageFile(file);
@@ -982,7 +1117,10 @@
         fileBlobs.base = makeAsset(file, metadata);
         garmentDispCache = null; // invalidate displacement map when garment changes
         destroyMask();           // garment changed → mask no longer valid
-        setMessage(target, `Phôi đã khóa · ${dimensions.width}×${dimensions.height} px`, 'success');
+        // Lưu phôi vào thư viện để lần sau bấm là dùng lại ngay.
+        const entry = await addBaseToLibrary(file, metadata);
+        currentLibraryBaseId = entry?.id ?? null;
+        setMessage(target, `Phôi đã khóa · ${dimensions.width}×${dimensions.height} px${entry ? ' · đã lưu vào thư viện' : ''}`, 'success');
         setMessage(element.safeAreaMessage, 'Kéo khung vùng in lên phần áo, rồi bấm xác nhận.', 'error');
         showToast('Đã thay phôi. Hãy hiệu chỉnh vùng in trước khi đặt artwork.');
       } else if (kind === 'background') {
@@ -3529,6 +3667,8 @@
     fileBlobs.base = null;
     garmentDispCache = null;
     destroyMask();
+    currentLibraryBaseId = null;
+    renderBaseLibrary();
     scene = Core.resetBase(scene);
     baseSelected = false;
     markDirty();
@@ -4009,7 +4149,9 @@
   }
 
   (async () => {
+    await loadBaseLibrary();
     await restoreWorkspace();
+    renderBaseLibrary();
     await preloadWatermarkFonts();
     // Vẽ lại watermark bằng scene đã khôi phục + font đã sẵn sàng.
     // Font local trong Chromium đôi khi chỉ rasterize đúng ở lần vẽ canvas

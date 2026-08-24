@@ -58,6 +58,15 @@
     .artwork-item-eye.is-hidden{color:#a9b5ad}
     .artwork-list-item.hidden-layer{opacity:.55}
     .artwork-list-item.hidden-layer .artwork-item-name{text-decoration:line-through}
+    .base-library-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-height:190px;overflow-y:auto;padding-right:2px}
+    .base-library-item{position:relative;aspect-ratio:3/4;border:1px solid #d4dbd5;border-radius:6px;background:#eef2ee;overflow:hidden;cursor:pointer;padding:0;transition:border-color .15s,box-shadow .15s}
+    .base-library-item img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+    .base-library-item:hover{border-color:#7f9b8c}
+    .base-library-item.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(197,74,46,.25)}
+    .base-library-item .base-library-name{position:absolute;left:0;right:0;bottom:0;padding:3px 5px;font:600 8px var(--mono);color:#fff;background:linear-gradient(transparent,rgba(23,33,30,.82));text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .base-library-item .base-library-remove{position:absolute;top:3px;right:3px;width:18px;height:18px;display:none;place-items:center;border:0;border-radius:4px;background:rgba(23,33,30,.72);color:#fff;font-size:10px;cursor:pointer;padding:0;line-height:1}
+    .base-library-item:hover .base-library-remove{display:grid}
+    .base-library-empty{grid-column:1/-1;border:1px dashed #c4d0c8;border-radius:6px;padding:12px 8px;font-size:10px;color:var(--muted);text-align:center}
   </style>
 </head>
 <body>
@@ -74,6 +83,11 @@
           <div class="source-summary"><div class="source-preview"><img id="baseThumbnail" alt="Xem trước phôi đã khóa" /></div><div><div class="source-name" id="baseName">Phôi trơn · mẫu mặc định</div><div class="source-sub" id="baseMeta">DEFAULT · KHÔNG CHỈNH SỬA</div></div></div>
           <div class="source-actions"><button class="upload-button" id="baseFileTrigger" type="button">Tải / thay phôi</button><button class="button button--subtle" id="resetBase" data-testid="reset-base" type="button">Khôi phục</button></div>
           <input class="sr-only" id="baseFile" data-testid="base-input" type="file" accept="image/png,image/jpeg,image/webp" />
+          <div class="base-library">
+            <div class="eyebrow" style="margin:12px 0 7px">Thư viện phôi <span style="color:#9aa89f" id="baseLibraryCount"></span></div>
+            <div class="base-library-grid" id="baseLibraryGrid" data-testid="base-library"></div>
+            <p class="message" id="baseLibraryMessage" role="status">Bấm phôi để đưa vào workspace — vị trí/kích thước đã chỉnh được nhớ riêng cho từng phôi.</p>
+          </div>
           <p class="message" id="baseMessage" data-testid="base-message" role="status">PNG nền trong suốt để thay nền sạch · JPG/WEBP cũng được khóa nguyên.</p>
         </section>
         <nav class="menu" aria-label="Các phần trong studio"><div class="side-heading">Không gian làm việc</div><button class="active" type="button"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 2v12M2 7h12"/></svg>Thiết kế</button><button type="button"><svg viewBox="0 0 16 16"><path d="M3 13l3-4 2 2 3-5 3 7"/><path d="M2 2h12v12H2z"/></svg>Phông nền</button><button type="button"><svg viewBox="0 0 16 16"><path d="M3 12V4h8l2 2v6z"/><circle cx="7" cy="8" r="1.5"/></svg>Logo & watermark</button></nav>

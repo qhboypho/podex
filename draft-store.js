@@ -2,8 +2,10 @@
   'use strict';
 
   const DATABASE_NAME = 'form-fashion-compositor';
-  const DATABASE_VERSION = 1;
+  // v2: thêm store 'baseLibrary' cho thư viện phôi (nâng cấp mượt từ v1).
+  const DATABASE_VERSION = 2;
   const STORE_NAME = 'workspaces';
+  const LIBRARY_STORE = 'baseLibrary';
   const WORKSPACE_ID = 'current';
 
   function requestAsPromise(request) {
@@ -27,6 +29,7 @@
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      if (!database.objectStoreNames.contains(LIBRARY_STORE)) database.createObjectStore(LIBRARY_STORE, { keyPath: 'id' });
     };
     return requestAsPromise(request);
   }
@@ -66,4 +69,56 @@
   }
 
   globalThis.FormDraftStore = { clear, load, save };
+
+  // ─── Thư viện phôi (base library) ─────────────────────────────────────────
+  // Store 'baseLibrary' trong cùng database; mỗi entry nhớ blob ảnh, metadata
+  // và transform/safeArea lần cuối người dùng chỉnh cho phôi đó.
+  async function listBases() {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(LIBRARY_STORE, 'readonly');
+      const entries = await requestAsPromise(transaction.objectStore(LIBRARY_STORE).getAll());
+      await transactionAsPromise(transaction);
+      return entries || [];
+    } finally {
+      database.close();
+    }
+  }
+
+  async function saveBase(entry) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(LIBRARY_STORE, 'readwrite');
+      transaction.objectStore(LIBRARY_STORE).put(entry);
+      await transactionAsPromise(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  async function updateBase(id, patch) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(LIBRARY_STORE, 'readwrite');
+      const store = transaction.objectStore(LIBRARY_STORE);
+      const existing = await requestAsPromise(store.get(id));
+      if (existing) store.put({ ...existing, ...patch, id });
+      await transactionAsPromise(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  async function deleteBase(id) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(LIBRARY_STORE, 'readwrite');
+      transaction.objectStore(LIBRARY_STORE).delete(id);
+      await transactionAsPromise(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  globalThis.FormBaseLibrary = { listBases, saveBase, updateBase, deleteBase };
 })();
