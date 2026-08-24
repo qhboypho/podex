@@ -206,6 +206,9 @@
     decorRotationOutput: $('#decorRotationOutput'),
     decorOpacityRange: $('#decorOpacityRange'),
     decorOpacityOutput: $('#decorOpacityOutput'),
+    // Theme toggle
+    themeLight: $('#themeLight'),
+    themeDark: $('#themeDark'),
   };
 
   const presetNames = {
@@ -269,6 +272,27 @@
     format: 'png',   // 'png' | 'jpg'
     scale: 1,        // 1 | 2 | 4  (1x = 1200 cạnh dài)
   };
+
+  // ─── Theme (Light mặc định · toggle thủ công) ─────────────────────────────
+  const THEME_KEY = 'form_theme';
+
+  function applyTheme(theme) {
+    const dark = theme === 'dark';
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    element.themeLight?.classList.toggle('active', !dark);
+    element.themeDark?.classList.toggle('active', dark);
+  }
+
+  function setTheme(theme) {
+    applyTheme(theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  }
+
+  let storedTheme = 'light';
+  try { storedTheme = localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'; } catch {}
+  applyTheme(storedTheme);
+  element.themeLight?.addEventListener('click', () => setTheme('light'));
+  element.themeDark?.addEventListener('click', () => setTheme('dark'));
 
   // ─── Settings persistence ────────────────────────────────────────────────
   const SETTINGS_KEY = 'form_ui_settings_v1';
