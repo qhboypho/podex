@@ -2564,7 +2564,8 @@
     if (decorCanvas.height !== H) decorCanvas.height = H;
     decorCtx.clearRect(0, 0, W, H);
 
-    const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
+    const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)]
+      .filter((item) => !item.hidden);
     for (const item of items) {
       await drawDecorItem(decorCtx, W, H, item);
       if (token !== decorPreviewToken) return;
