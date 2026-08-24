@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Watermark In Đơn Hàng",
+  "version": "1.0.0",
+  "description": "Thêm watermark chữ/logo vào phiếu in đơn từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) - tuỳ chỉnh kích thước, độ mờ, vị trí bất kỳ.",
+  "permissions": ["tabs", "storage", "unlimitedStorage", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "action": {
+    "default_title": "Watermark In Đơn Hàng",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "viewer/viewer.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["viewer/*", "pdfjs/*", "icons/*"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
+}

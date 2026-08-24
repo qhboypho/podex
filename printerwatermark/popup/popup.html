@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 300px;
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #202124;
+      background: #fff;
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      background: #1a73e8;
+      color: #fff;
+    }
+    .head img { width: 26px; height: 26px; }
+    .head h1 { font-size: 14px; margin: 0; }
+    .body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 13px;
+    }
+    .switch { position: relative; width: 40px; height: 22px; flex: 0 0 auto; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: #c1c7cd;
+      border-radius: 22px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .slider:before {
+      content: "";
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform .2s;
+    }
+    .switch input:checked + .slider { background: #1a73e8; }
+    .switch input:checked + .slider:before { transform: translateX(18px); }
+    button {
+      border: 1px solid #1a73e8;
+      color: #1a73e8;
+      background: #fff;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #e8f0fe; }
+    .hint { font-size: 11.5px; color: #5f6368; line-height: 1.55; margin: 0; }
+    .hint b { color: #202124; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <img src="../icons/icon48.png" alt="">
+    <h1>Watermark In Đơn Hàng</h1>
+  </div>
+  <div class="body">
+    <div class="toggle-row">
+      <span>Tự động chặn PDF in đơn</span>
+      <label class="switch">
+        <input type="checkbox" id="intercept">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <button id="openViewer">Mở trình in &amp; watermark</button>
+    <p class="hint">
+      <b>Cách dùng:</b> bấm <b>In đơn</b> trên sàn như bình thường — tab PDF sẽ mở
+      bằng trình của extension. Bấm nút <b>Watermark</b> để thêm chữ/logo,
+      kéo thả vị trí, chỉnh size + độ mờ rồi <b>In đơn</b> hoặc <b>Tải PDF</b>.
+    </p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

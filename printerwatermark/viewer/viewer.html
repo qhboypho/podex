@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Watermark In Đơn Hàng</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header id="toolbar">
+    <div class="tb-left">
+      <img class="app-logo" src="../icons/icon48.png" alt="">
+      <div class="doc-meta">
+        <span id="docName">Chưa có file PDF</span>
+        <span id="docPages"></span>
+      </div>
+    </div>
+    <div class="tb-center">
+      <button id="zoomOut" class="tb-btn" title="Thu nhỏ">−</button>
+      <span id="zoomLabel">Vừa khung</span>
+      <button id="zoomIn" class="tb-btn" title="Phóng to">+</button>
+      <button id="zoomFit" class="tb-btn" title="Vừa khung">Fit</button>
+    </div>
+    <div class="tb-right">
+      <button id="btnOpenFile" class="tb-btn">Chọn PDF</button>
+      <button id="btnToggleWm" class="tb-btn accent">Watermark</button>
+      <button id="btnDownload" class="tb-btn">Tải PDF</button>
+      <button id="btnPrint" class="tb-btn primary">In đơn</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="stage">
+      <div id="dropzone">
+        <div class="dz-inner">
+          <img src="../icons/icon128.png" width="88" alt="">
+          <h2>Kéo thả file PDF vào đây</h2>
+          <p>hoặc bấm <b>Chọn PDF</b> ở thanh trên.</p>
+          <p class="dz-note">Khi bấm <b>in đơn</b> trên sàn (TikTok Shop, Shopee, Lazada...),
+          tab PDF sẽ tự mở bằng trình này để đóng dấu watermark trước khi in.</p>
+        </div>
+      </div>
+      <div id="pages" class="hidden"></div>
+    </section>
+
+    <aside id="sidebar" class="hidden">
+      <div class="sb-head">
+        <h2>Watermark</h2>
+        <button id="sbClose" class="tb-btn" title="Đóng">×</button>
+      </div>
+      <label class="wm-switch">
+        <input type="checkbox" id="wmEnabled">
+        <span>Bật watermark</span>
+      </label>
+      <div id="layerList"></div>
+      <div class="sb-actions">
+        <button id="addText" class="tb-btn">+ Thêm chữ</button>
+        <button id="addLogo" class="tb-btn">+ Thêm logo</button>
+        <button id="resetAll" class="tb-btn danger">Đặt lại</button>
+      </div>
+      <p class="sb-hint">Mẹo: kéo trực tiếp điểm tròn trên trang xem trước để đặt vị trí bất kỳ.</p>
+    </aside>
+  </main>
+
+  <div id="busy" class="hidden"><div class="spinner"></div><span id="busyText">Đang xử lý...</span></div>
+  <div id="toast" class="hidden"></div>
+
+  <input type="file" id="fileInput" accept="application/pdf" hidden>
+  <input type="file" id="imgInput" accept="image/*" hidden>
+  <style id="pageStyle"></style>
+
+  <script src="../pdfjs/pdf.min.js"></script>
+  <script src="../pdfjs/pdf-lib.min.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>
