@@ -2547,6 +2547,7 @@
 
   async function drawDecorations(context, W, H) {
     for (const item of [...Core.getTextItems(scene), ...Core.getIconItems(scene)]) {
+      if (item.hidden) continue;
       await drawDecorItem(context, W, H, item);
     }
   }
@@ -2579,7 +2580,9 @@
   function syncDecorHitNodes() {
     ensureDecorLayers();
     pruneMultiSelect();
-    const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
+    // Lớp bị ẩn (eye off) không vẽ và không bắt sự kiện trên canvas.
+    const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)]
+      .filter((item) => !item.hidden);
     const seen = new Set();
     const aspect = artboardAspectRatio();
     for (const item of items) {
@@ -2635,7 +2638,7 @@
     if (!decorActionBar) return;
     const selection = scene.activeDecor;
     const item = selection ? Core.findDecorItem(scene, selection.type, selection.id) : null;
-    const show = Boolean(item) && multiSelectKeys.size <= 1 && !brushState.active && !inlineTextEdit;
+    const show = Boolean(item) && !item.hidden && multiSelectKeys.size <= 1 && !brushState.active && !inlineTextEdit;
     decorActionBar.classList.toggle('hidden', !show);
     if (!show) return;
     const rawBox = measureDecorBox(item);
@@ -3180,6 +3183,29 @@
     render();
   }
 
+  function toggleDecorHiddenById(type, id) {
+    scene = Core.toggleDecorHidden(scene, type, id);
+    const item = Core.findDecorItem(scene, type, id);
+    // Ẩn lớp đang chọn → bỏ lớp đó khỏi lựa chọn để bar/editor không treo trống.
+    if (item?.hidden && isDecorItemSelected(item)) {
+      const key = `${type}:${id}`;
+      if (multiSelectKeys.size > 0) {
+        multiSelectKeys.delete(key);
+        if (decorKeyOf(scene.activeDecor) === key) {
+          const lastKey = [...multiSelectKeys].pop() || null;
+          scene = Core.selectDecor(scene, lastKey
+            ? { type: lastKey.split(':')[0], id: Number(lastKey.split(':')[1]) }
+            : null);
+          if (!lastKey) multiSelectKeys.clear();
+        }
+      } else {
+        scene = Core.selectDecor(scene, null);
+      }
+    }
+    markDirty();
+    render();
+  }
+
   function renderDecorList(texts, icons, selection) {
     const rows = [
       ...texts.map((item) => ({ type: 'text', item })),
@@ -3192,7 +3218,9 @@
         ? '<span>Aa</span>'
         : `<img src="${Icons.getSrc(item.iconId, item.color)}" alt="" />`;
       const title = type === 'text' ? (item.content || '(trống)').slice(0, 22) : (Icons.has(item.iconId) ? item.iconId : '?');
-      html += `<div class="artwork-list-item${isActive ? ' active' : ''}${item.locked ? ' locked' : ''}" data-decor-row="${type}:${item.id}">`
+      const eyeSvg = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.5"/></svg>';
+      html += `<div class="artwork-list-item${isActive ? ' active' : ''}${item.locked ? ' locked' : ''}${item.hidden ? ' hidden-layer' : ''}" data-decor-row="${type}:${item.id}">`
+        + `<button class="artwork-item-eye${item.hidden ? ' is-hidden' : ''}" data-decor-eye="${type}:${item.id}" type="button" title="${item.hidden ? 'Hiện layer' : 'Ẩn layer'}">${eyeSvg}</button>`
         + `<div class="decor-item-thumb">${thumb}</div>`
         + `<div class="artwork-item-info"><span class="artwork-item-name">${escapeHtml(title)}</span>`
         + `<span class="artwork-item-meta">${type === 'text' ? `${item.font} · ${item.fontSize}px` : 'Icon'}${item.locked ? ' · 🔒' : ''}</span></div>`
@@ -3204,12 +3232,19 @@
 
     element.decorList.querySelectorAll('.artwork-list-item').forEach((row) => {
       row.addEventListener('click', (event) => {
-        if (event.target.closest('[data-decor-lock], [data-decor-remove]')) return;
+        if (event.target.closest('[data-decor-lock], [data-decor-remove], [data-decor-eye]')) return;
         const [type, id] = row.dataset.decorRow.split(':');
         multiSelectKeys.clear();
         scene = Core.selectDecor(scene, { type, id: Number(id) });
         markDirty();
         render();
+      });
+    });
+    element.decorList.querySelectorAll('[data-decor-eye]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const [type, id] = button.dataset.decorEye.split(':');
+        toggleDecorHiddenById(type, Number(id));
       });
     });
     element.decorList.querySelectorAll('[data-decor-lock]').forEach((button) => {

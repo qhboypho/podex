@@ -25,6 +25,7 @@ const {
   removeIconItem,
   selectDecor,
   toggleDecorLock,
+  toggleDecorHidden,
   duplicateDecorItem,
   isEditableLayer,
   moveOverlay,
@@ -382,6 +383,21 @@ test('duplicates icon layers and ignores unknown decoration ids', () => {
   assert.equal(copy.iconId, 'bolt');
   assert.equal(copy.type, 'icon');
   assert.deepEqual(scene.activeDecor, { type: 'icon', id: copy.id });
+});
+
+test('toggles the hidden flag of a decoration and persists it in drafts', () => {
+  let scene = addTextItem(createScene());
+  const id = scene.activeDecor.id;
+  assert.equal(getTextItems(scene)[0].hidden, false);
+  scene = toggleDecorHidden(scene, 'text', id);
+  assert.equal(getTextItems(scene)[0].hidden, true);
+  scene = toggleDecorHidden(scene, 'text', id);
+  assert.equal(getTextItems(scene)[0].hidden, false);
+  scene = toggleDecorHidden(scene, 'icon', id);
+  assert.equal(getTextItems(scene)[0].hidden, false, 'unknown type is a no-op');
+  scene = toggleDecorHidden(scene, 'text', id);
+  const restored = applyDraft(createScene(), serializeDraft(scene));
+  assert.equal(restored.textItems[0].hidden, true);
 });
 
 test('decorations follow the base transform like artwork overlays do', () => {

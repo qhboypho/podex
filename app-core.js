@@ -158,6 +158,7 @@ function constrainTextItem(item) {
     rotation: clamp(round(number(item.rotation, 0)), -MAX_DECOR_ROTATION, MAX_DECOR_ROTATION),
     opacity: clamp(number(item.opacity, 1), 0.05, 1),
     locked: Boolean(item.locked),
+    hidden: Boolean(item.hidden),
     content: String(item.content ?? '').slice(0, MAX_DECOR_TEXT_LENGTH),
     font: TEXT_FONTS.includes(item.font) ? item.font : 'Arial',
     style: TEXT_STYLES.includes(item.style) ? item.style : 'bold',
@@ -174,6 +175,7 @@ function constrainIconItem(item) {
     rotation: clamp(round(number(item.rotation, 0)), -MAX_DECOR_ROTATION, MAX_DECOR_ROTATION),
     opacity: clamp(number(item.opacity, 1), 0.05, 1),
     locked: Boolean(item.locked),
+    hidden: Boolean(item.hidden),
     iconId: String(item.iconId || ''),
     color: normalizeHexColor(item.color, '#17211e'),
   };
@@ -522,6 +524,7 @@ function plainDecorItem(item) {
     rotation: item.rotation,
     opacity: item.opacity,
     locked: item.locked || false,
+    hidden: item.hidden || false,
     ...(item.type === 'text'
       ? { content: item.content, font: item.font, style: item.style, fontSize: item.fontSize, color: item.color }
       : { iconId: item.iconId, size: item.size, color: item.color }),
@@ -877,6 +880,18 @@ function toggleDecorLock(scene, type, itemId) {
   };
 }
 
+// Ẩn/hiện một lớp chữ/icon trên preview và ảnh xuất.
+function toggleDecorHidden(scene, type, itemId) {
+  const listKey = getDecorListKey(scene, type);
+  if (!listKey) return scene;
+  const list = scene[listKey];
+  if (!list.some((item) => item.id === itemId)) return scene;
+  return {
+    ...scene,
+    [listKey]: list.map((item) => (item.id === itemId ? { ...item, hidden: !item.hidden } : item)),
+  };
+}
+
 // Nhân bản một lớp chữ/icon: id mới, lệch nhẹ để thấy rõ bản copy, và chọn bản copy.
 function duplicateDecorItem(scene, type, itemId) {
   const listKey = getDecorListKey(scene, type);
@@ -942,6 +957,7 @@ globalThis.FormCore = {
   serializeDraft,
   duplicateDecorItem,
   toggleDecorLock,
+  toggleDecorHidden,
   toggleOverlayLock,
   setSafeArea,
   selectView,
