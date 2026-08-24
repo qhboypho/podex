@@ -1137,8 +1137,9 @@
         // Artwork upload: check if current active overlay has no artwork yet
         const currentActive = Core.getActiveOverlay(scene);
         const hasExistingArt = currentActive && currentActive.artwork?.src;
-        if (hasExistingArt) {
-          // Add a NEW overlay with this artwork
+        if (hasExistingArt || !currentActive) {
+          // Thêm lớp mới khi overlay hiện tại đã có ảnh, hoặc khi danh sách
+          // overlay rỗng (người dùng đã xóa hết artwork trước đó).
           scene = Core.addOverlay(scene);
         }
         const targetOverlay = Core.getActiveOverlay(scene);
