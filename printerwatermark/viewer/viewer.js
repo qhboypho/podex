@@ -23,7 +23,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const clampPct = v => Math.round(clamp(v, 0, 100) * 10) / 10;
 
 function defaultCfg() {
-  return { enabled: true, layers: [], zoom: 'fit' };
+  return { enabled: true, layers: [], zoom: 'fit', thermal: false };
 }
 
 function newTextLayer() {
@@ -303,13 +303,15 @@ function positionsFor(layer, W, H) {
 function drawLayerSync(ctx, layer, ptW, ptH, scale, imgEnt) {
   const W = ptW * scale;
   const H = ptH * scale;
+  const thermal = !!cfg.thermal;
 
   if (layer.type === 'text') {
     const text = String(layer.text || '');
     if (!text.trim()) return;
     ctx.save();
-    ctx.globalAlpha = clamp((layer.opacity || 0) / 100, 0.02, 1);
-    ctx.fillStyle = layer.color || '#000';
+    const baseAlpha = clamp((layer.opacity || 0) / 100, 0.02, 1);
+    ctx.globalAlpha = thermal ? Math.min(1, baseAlpha + 0.45) : baseAlpha;
+    ctx.fillStyle = thermal ? '#000000' : (layer.color || '#000');
     const fs = (layer.fontSize || 20) * scale;
     ctx.font = (layer.italic ? 'italic ' : '') + (layer.bold ? '700 ' : '400 ') + fs + 'px "' + (layer.fontFamily || 'Arial') + '", sans-serif';
     ctx.textAlign = 'center';
@@ -329,7 +331,8 @@ function drawLayerSync(ctx, layer, ptW, ptH, scale, imgEnt) {
   } else if (layer.type === 'image') {
     if (!imgEnt || !imgEnt.ok) return;
     ctx.save();
-    ctx.globalAlpha = clamp((layer.opacity || 0) / 100, 0.02, 1);
+    const baseAlpha = clamp((layer.opacity || 0) / 100, 0.02, 1);
+    ctx.globalAlpha = thermal ? Math.min(1, baseAlpha + 0.45) : baseAlpha;
     const w = (layer.width || 20) / 100 * W;
     const h = w * (imgEnt.h / imgEnt.w);
     const rot = (layer.rotation || 0) * Math.PI / 180;
@@ -434,6 +437,7 @@ function fontOptions(selected) {
 
 function renderSidebar() {
   $('#wmEnabled').checked = !!cfg.enabled;
+  $('#thermalMode').checked = !!cfg.thermal;
   const list = $('#layerList');
   list.innerHTML = '';
 
@@ -868,6 +872,12 @@ function wireEvents() {
     saveCfg();
     drawOverlays();
     buildHandles();
+  });
+
+  $('#thermalMode').addEventListener('change', e => {
+    cfg.thermal = e.target.checked;
+    saveCfg();
+    drawOverlays();
   });
 
   $('#addText').onclick = () => {
