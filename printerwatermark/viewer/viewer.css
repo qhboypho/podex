@@ -257,18 +257,34 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   box-shadow: 0 4px 14px rgba(0,0,0,.3);
 }
 
+#printRoot { display: none; }
+
 @media print {
-  #toolbar, #sidebar, #dropzone, .wm-handle, #busy, #toast { display: none !important; }
-  html, body { overflow: visible; height: auto; background: #fff; }
-  #main { display: block; }
-  #stage { overflow: visible; padding: 0; }
-  #pages { display: block; }
-  .page {
+  body > *:not(#printRoot) { display: none !important; }
+  html, body {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    background: #fff !important;
     margin: 0 !important;
-    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  #printRoot { display: block !important; }
+  .print-page {
+    margin: 0;
+    padding: 0;
     break-after: page;
     page-break-after: always;
-    width: 100% !important;
   }
-  .page:last-child { break-after: auto; page-break-after: auto; }
+  .print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .print-page img {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 0;
+  }
 }

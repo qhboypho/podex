@@ -63,6 +63,11 @@ function saveCfg() {
   }, 250);
 }
 
+window.addEventListener('pagehide', () => {
+  clearTimeout(saveTimer);
+  try { chrome.storage.local.set({ wmConfig: cfg }); } catch (e) { /* ignore */ }
+});
+
 // ---------- busy / toast ----------
 function setBusy(text) {
   const b = $('#busy');
@@ -250,14 +255,28 @@ function preparePrintStyle() {
 function getImage(dataUrl) {
   if (!dataUrl) return Promise.resolve(null);
   if (imgCache.has(dataUrl)) return imgCache.get(dataUrl);
+  const entry = { ok: false, img: null, w: 0, h: 0 };
   const p = new Promise(res => {
     const img = new Image();
-    img.onload = () => res({ ok: true, img, w: img.naturalWidth, h: img.naturalHeight });
-    img.onerror = () => res({ ok: false });
+    img.onload = () => {
+      entry.ok = true;
+      entry.img = img;
+      entry.w = img.naturalWidth;
+      entry.h = img.naturalHeight;
+      res(entry);
+    };
+    img.onerror = () => res(entry);
     img.src = dataUrl;
   });
+  p.entry = entry;
   imgCache.set(dataUrl, p);
   return p;
+}
+
+function getCachedImage(dataUrl) {
+  if (!dataUrl) return null;
+  const p = imgCache.get(dataUrl);
+  return (p && p.entry) || null;
 }
 
 function positionsFor(layer, W, H) {
@@ -281,7 +300,7 @@ function positionsFor(layer, W, H) {
   return out;
 }
 
-async function drawLayer(ctx, layer, ptW, ptH, scale) {
+function drawLayerSync(ctx, layer, ptW, ptH, scale, imgEnt) {
   const W = ptW * scale;
   const H = ptH * scale;
 
@@ -308,23 +327,29 @@ async function drawLayer(ctx, layer, ptW, ptH, scale) {
     }
     ctx.restore();
   } else if (layer.type === 'image') {
-    if (!layer.dataUrl) return;
-    const ent = await getImage(layer.dataUrl);
-    if (!ent || !ent.ok) return;
+    if (!imgEnt || !imgEnt.ok) return;
     ctx.save();
     ctx.globalAlpha = clamp((layer.opacity || 0) / 100, 0.02, 1);
     const w = (layer.width || 20) / 100 * W;
-    const h = w * (ent.h / ent.w);
+    const h = w * (imgEnt.h / imgEnt.w);
     const rot = (layer.rotation || 0) * Math.PI / 180;
     for (const [cx, cy] of positionsFor(layer, W, H)) {
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(rot);
-      ctx.drawImage(ent.img, -w / 2, -h / 2, w, h);
+      ctx.drawImage(imgEnt.img, -w / 2, -h / 2, w, h);
       ctx.restore();
     }
     ctx.restore();
   }
+}
+
+async function drawLayer(ctx, layer, ptW, ptH, scale) {
+  let imgEnt = null;
+  if (layer.type === 'image' && layer.dataUrl) {
+    imgEnt = await getImage(layer.dataUrl);
+  }
+  drawLayerSync(ctx, layer, ptW, ptH, scale, imgEnt);
 }
 
 function scheduleRedraw() {
@@ -716,14 +741,51 @@ function buildImageCard(layer) {
 }
 
 // ---------- print / download ----------
-function ensureOverlaysForPrint() {
-  return drawOverlays();
+function composePageCanvas(p) {
+  const tmp = document.createElement('canvas');
+  tmp.width = p.base.width;
+  tmp.height = p.base.height;
+  const c = tmp.getContext('2d');
+  c.fillStyle = '#ffffff';
+  c.fillRect(0, 0, tmp.width, tmp.height);
+  c.drawImage(p.base, 0, 0);
+  if (cfg.enabled) {
+    for (const layer of cfg.layers) {
+      const ent = layer.type === 'image' ? getCachedImage(layer.dataUrl) : null;
+      drawLayerSync(c, layer, p.ptW, p.ptH, p.scale, ent);
+    }
+  }
+  return tmp;
+}
+
+function preparePrintRoot(force) {
+  const existing = $('#printRoot');
+  if (existing && !force) return;
+  if (existing) existing.remove();
+  if (!pages.length) return;
+  const root = document.createElement('div');
+  root.id = 'printRoot';
+  for (const p of pages) {
+    const wrap = document.createElement('div');
+    wrap.className = 'print-page';
+    const img = document.createElement('img');
+    img.src = composePageCanvas(p).toDataURL('image/jpeg', 0.92);
+    wrap.append(img);
+    root.append(wrap);
+  }
+  document.body.append(root);
 }
 
 async function printPdf() {
   if (!pages.length) { toast('Chưa có file PDF để in.'); return; }
-  await ensureOverlaysForPrint();
+  setBusy('Đang chuẩn bị in...');
+  for (const layer of cfg.layers) {
+    if (layer.type === 'image' && layer.dataUrl) await getImage(layer.dataUrl);
+  }
+  await drawOverlays();
   preparePrintStyle();
+  preparePrintRoot(true);
+  setBusy(null);
   setTimeout(() => window.print(), 60);
 }
 
@@ -734,19 +796,7 @@ async function downloadPdf() {
     const { PDFDocument } = PDFLib;
     const out = await PDFDocument.create();
     for (const p of pages) {
-      const tmp = document.createElement('canvas');
-      tmp.width = p.base.width;
-      tmp.height = p.base.height;
-      const c = tmp.getContext('2d');
-      c.fillStyle = '#fff';
-      c.fillRect(0, 0, tmp.width, tmp.height);
-      c.drawImage(p.base, 0, 0);
-      if (cfg.enabled) {
-        for (const layer of cfg.layers) {
-          await drawLayer(c, layer, p.ptW, p.ptH, p.scale);
-        }
-      }
-      const jpg = tmp.toDataURL('image/jpeg', 0.92);
+      const jpg = composePageCanvas(p).toDataURL('image/jpeg', 0.92);
       const img = await out.embedJpg(jpg);
       const page = out.addPage([p.ptW, p.ptH]);
       page.drawImage(img, { x: 0, y: 0, width: p.ptW, height: p.ptH });
@@ -868,6 +918,11 @@ function wireEvents() {
   window.addEventListener('beforeprint', () => {
     drawOverlays();
     preparePrintStyle();
+    preparePrintRoot(false);
+  });
+  window.addEventListener('afterprint', () => {
+    const r = $('#printRoot');
+    if (r) r.remove();
   });
 }
 
