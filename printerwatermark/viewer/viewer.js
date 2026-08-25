@@ -23,7 +23,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const clampPct = v => Math.round(clamp(v, 0, 100) * 10) / 10;
 
 function defaultCfg() {
-  return { enabled: true, layers: [] };
+  return { enabled: true, layers: [], zoom: 'fit' };
 }
 
 function newTextLayer() {
@@ -768,6 +768,8 @@ function preparePrintRoot(force) {
   for (const p of pages) {
     const wrap = document.createElement('div');
     wrap.className = 'print-page';
+    wrap.style.width = p.ptW + 'pt';
+    wrap.style.height = p.ptH + 'pt';
     const img = document.createElement('img');
     img.src = composePageCanvas(p).toDataURL('image/jpeg', 0.92);
     wrap.append(img);
@@ -888,13 +890,22 @@ function wireEvents() {
 
   $('#zoomIn').onclick = () => {
     zoom = zoom === 'fit' ? 100 : Math.min(300, zoom + 25);
+    cfg.zoom = zoom;
+    saveCfg();
     applyZoom();
   };
   $('#zoomOut').onclick = () => {
     zoom = zoom === 'fit' ? 75 : Math.max(25, zoom - 25);
+    cfg.zoom = zoom;
+    saveCfg();
     applyZoom();
   };
-  $('#zoomFit').onclick = () => { zoom = 'fit'; applyZoom(); };
+  $('#zoomFit').onclick = () => {
+    zoom = 'fit';
+    cfg.zoom = 'fit';
+    saveCfg();
+    applyZoom();
+  };
 
   window.addEventListener('resize', () => { if (zoom === 'fit') applyZoom(); });
 
@@ -929,6 +940,7 @@ function wireEvents() {
 // ---------- init ----------
 (async function init() {
   await loadCfg();
+  zoom = cfg.zoom || 'fit';
   renderSidebar();
   wireEvents();
   await initFromParams();
