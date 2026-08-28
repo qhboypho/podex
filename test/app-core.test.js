@@ -24,6 +24,7 @@ const {
   removeTextItem,
   removeIconItem,
   selectDecor,
+  toggleOverlayHidden,
   toggleDecorLock,
   toggleDecorHidden,
   groupDecorItems,
@@ -445,6 +446,19 @@ test('removing a group member dissolves a two-member group', () => {
   ]);
   scene = removeTextItem(scene, first.id);
   assert.equal(findDecorItem(scene, 'text', second.id).groupId, null);
+});
+
+test('toggles the hidden flag of an artwork overlay and persists it', () => {
+  let scene = createScene();
+  const overlayId = scene.activeOverlayId;
+  assert.equal(scene.overlays[0].hidden, false);
+  scene = toggleOverlayHidden(scene, overlayId);
+  assert.equal(scene.overlays[0].hidden, true);
+  const restored = applyDraft(createScene(), serializeDraft(scene));
+  assert.equal(restored.overlays[0].hidden, true);
+  scene = toggleOverlayHidden(scene, overlayId);
+  assert.equal(scene.overlays[0].hidden, false);
+  assert.equal(toggleOverlayHidden(scene, 99999), scene, 'unknown id is a no-op');
 });
 
 test('decorations follow the base transform like artwork overlays do', () => {

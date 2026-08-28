@@ -143,6 +143,7 @@ const createOverlay = (side) => ({
   rotation: -4,
   opacity: 0.88,
   locked: false,
+  hidden: false,
   artwork: { ...DEFAULT_ARTWORK },
 });
 
@@ -520,6 +521,7 @@ function plainOverlay(overlay) {
     rotation: overlay.rotation,
     opacity: overlay.opacity,
     locked: overlay.locked || false,
+    hidden: overlay.hidden || false,
     artwork: overlay.artwork ? { name: overlay.artwork.name, label: overlay.artwork.label } : undefined,
   };
 }
@@ -767,6 +769,17 @@ function toggleOverlayLock(scene, overlayId) {
   if (idx < 0) return scene;
   const newList = [...list];
   newList[idx] = { ...newList[idx], locked: !newList[idx].locked };
+  return withLegacy({ ...scene, [listKey]: newList });
+}
+
+// Ẩn/hiện một overlay artwork trên preview và ảnh xuất.
+function toggleOverlayHidden(scene, overlayId) {
+  const listKey = scene.overlays.find(o => o.id === overlayId) ? 'overlays' : 'backOverlays';
+  const list = scene[listKey];
+  const idx = list.findIndex(o => o.id === overlayId);
+  if (idx < 0) return scene;
+  const newList = [...list];
+  newList[idx] = { ...newList[idx], hidden: !newList[idx].hidden };
   return withLegacy({ ...scene, [listKey]: newList });
 }
 
@@ -1029,6 +1042,7 @@ globalThis.FormCore = {
   selectOverlayById,
   serializeDraft,
   duplicateDecorItem,
+  toggleOverlayHidden,
   toggleDecorLock,
   toggleDecorHidden,
   groupDecorItems,

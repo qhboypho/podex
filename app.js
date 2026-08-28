@@ -508,7 +508,7 @@
       element.artworkOverlay.setAttribute('aria-valuetext', `Artwork ${percentInput(overlay.x)} ngang, ${percentInput(overlay.y)} dọc`);
       element.artworkImage.src = artworkIsUploaded ? overlay.artwork.src : '';
       element.artworkDefaultLabel.textContent = overlay.artwork?.label || 'ROUGE / 07';
-      element.artworkOverlay.style.display = '';
+      element.artworkOverlay.style.display = overlay.hidden ? 'none' : '';
       element.artworkOverlay.dataset.overlayId = String(overlay.id);
     } else {
       element.artworkOverlay.style.display = 'none';
@@ -664,7 +664,7 @@
 
     // Trigger live fabric warp preview — check ALL overlays, not just active
     const currentOverlays = Core.getOverlays(scene);
-    const hasAnyArtwork = currentOverlays.some(o => o.artwork?.src) && scene.base.kind !== 'default';
+    const hasAnyArtwork = currentOverlays.some(o => o.artwork?.src && !o.hidden) && scene.base.kind !== 'default';
     if (hasAnyArtwork) {
       scheduleFabricPreview();
     } else {
@@ -681,7 +681,8 @@
 
     // The first overlay in the current view uses #artworkOverlay (static DOM).
     // Additional overlays get dynamic nodes in #overlaysContainer.
-    const extraOverlays = overlays.filter(o => o !== activeOverlay);
+    // Lớp bị ẩn (eye off) không render node tương tác.
+    const extraOverlays = overlays.filter(o => o !== activeOverlay && !o.hidden);
 
     // Remove stale nodes
     for (const [id, node] of _overlayNodes) {
@@ -725,6 +726,7 @@
     const list = element.artworkList;
     // Build HTML
     let html = '';
+    const eyeSvg = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.5"/></svg>';
     for (const ov of overlays) {
       const isActive = ov.id === activeOverlay?.id;
       const hasImage = Boolean(ov.artwork?.src);
@@ -734,7 +736,8 @@
       const thumbHtml = hasImage
         ? `<img class="artwork-thumb" src="${ov.artwork.src}" alt="" />`
         : `<div class="artwork-thumb-placeholder">${label.slice(0, 4)}</div>`;
-      html += `<div class="artwork-list-item${isActive ? ' active' : ''}${isLocked ? ' locked' : ''}" data-overlay-id="${ov.id}">`
+      html += `<div class="artwork-list-item${isActive ? ' active' : ''}${isLocked ? ' locked' : ''}${ov.hidden ? ' hidden-layer' : ''}" data-overlay-id="${ov.id}">`
+        + `<button class="artwork-item-eye${ov.hidden ? ' is-hidden' : ''}" data-overlay-eye="${ov.id}" type="button" title="${ov.hidden ? 'Hiện artwork' : 'Ẩn artwork'}">${eyeSvg}</button>`
         + thumbHtml
         + `<div class="artwork-item-info"><span class="artwork-item-name">${name}</span>`
         + `<span class="artwork-item-meta">${ov.kind === 'embroidery' ? 'Thêu' : 'In'} · ${Math.round(34 * ov.scale)}cm${isLocked ? ' · 🔒' : ''}</span></div>`
@@ -747,8 +750,16 @@
     // Attach events
     list.querySelectorAll('.artwork-list-item').forEach(item => {
       item.addEventListener('click', (e) => {
-        if (e.target.closest('.artwork-item-remove, .artwork-item-lock')) return;
+        if (e.target.closest('.artwork-item-remove, .artwork-item-lock, [data-overlay-eye]')) return;
         selectArtworkOverlay(Number(item.dataset.overlayId));
+      });
+    });
+    list.querySelectorAll('[data-overlay-eye]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        scene = Core.toggleOverlayHidden(scene, Number(btn.dataset.overlayEye));
+        markDirty();
+        render();
       });
     });
     list.querySelectorAll('.artwork-item-lock').forEach(btn => {
@@ -2114,7 +2125,7 @@
     const overlay = Core.getActiveOverlay(scene);
     const artworkSrc = overlay?.artwork?.src;
 
-    if (!artworkSrc || scene.base.kind === 'default') { clearFabricPreview(); return; }
+    if (!artworkSrc || overlay.hidden || scene.base.kind === 'default') { clearFabricPreview(); return; }
 
     ensureFabricPreviewCanvas();
 
@@ -3225,8 +3236,8 @@
       const baseImage = await loadImage(scene.base.src);
       drawImageContain(context, baseImage, width, height, scene.baseTransform);
 
-      // Draw ALL overlays for the current view
-      const currentOverlays = Core.getOverlays(scene);
+      // Draw ALL overlays for the current view (bỏ lớp bị ẩn)
+      const currentOverlays = Core.getOverlays(scene).filter(ov => !ov.hidden);
       for (const ov of currentOverlays) {
         await drawArtworkWithFabric(context, baseImage, width, height, ov);
       }
