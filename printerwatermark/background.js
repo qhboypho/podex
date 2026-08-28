@@ -2,7 +2,18 @@ const memoryStore = new Map();
 const pdfTabs = new Map();
 const urlMem = new Map();
 const ruleMem = new Map();
+const bypassOpen = new Map();
 const PDF_EXT_RE = /\.pdf(\?|#|$)/i;
+
+function isBypassed(url) {
+  const t = bypassOpen.get(url);
+  if (!t) return false;
+  if (Date.now() - t > 2 * 60 * 1000) {
+    bypassOpen.delete(url);
+    return false;
+  }
+  return true;
+}
 
 async function putPending(id, payload) {
   memoryStore.set(id, payload);
@@ -140,14 +151,22 @@ chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (details.type !== 'main_frame' || details.tabId < 0) return;
     let isPdf = false;
+    let isSniffable = false;
     let isAttachment = false;
     for (const h of details.responseHeaders || []) {
       const n = (h.name || '').toLowerCase();
-      if (n === 'content-type' && /application\/pdf/i.test(h.value || '')) isPdf = true;
-      else if (n === 'content-disposition' && /attachment/i.test(h.value || '')) isAttachment = true;
+      const v = (h.value || '').trim();
+      if (n === 'content-type') {
+        if (/application\/(x-)?pdf|application\/acrobat|text\/pdf/i.test(v)) isPdf = true;
+        else if (/application\/(octet-stream|force-download|binary|download|x-download)/i.test(v)) isSniffable = true;
+      } else if (n === 'content-disposition' && /attachment/i.test(v)) {
+        isAttachment = true;
+      }
     }
-    if (!isPdf || isAttachment) return;
+    if (!isPdf && !isSniffable) return;
+    if (isBypassed(details.url)) return;
     rememberPdfTab(details.tabId, details.url);
+    if (isAttachment) return;
     isInterceptEnabled().then(async enabled => {
       if (!enabled) return;
       try {
@@ -260,6 +279,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === 'PW_CLEAN_PDF') {
         await dropPending(msg.id);
+        sendResponse({ ok: true });
+        return;
+      }
+
+      if (msg.type === 'PW_OPEN_NORMAL') {
+        const url = String(msg.url || '');
+        if (url && /^https?:/i.test(url)) {
+          for (const [k, t] of bypassOpen) {
+            if (Date.now() - t > 2 * 60 * 1000) bypassOpen.delete(k);
+          }
+          bypassOpen.set(url, Date.now());
+          await chrome.tabs.create({ url });
+        }
         sendResponse({ ok: true });
         return;
       }

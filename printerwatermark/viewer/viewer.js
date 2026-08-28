@@ -922,8 +922,13 @@ function wireEvents() {
   $('#btnRetry').addEventListener('click', () => {
     if (lastFailedUrl) loadPdfUrl(lastFailedUrl);
   });
-  $('#btnOpenNormal').addEventListener('click', () => {
-    if (lastFailedUrl) chrome.tabs.create({ url: lastFailedUrl });
+  $('#btnOpenNormal').addEventListener('click', async () => {
+    if (!lastFailedUrl) return;
+    try {
+      await chrome.runtime.sendMessage({ type: 'PW_OPEN_NORMAL', url: lastFailedUrl });
+    } catch (e) {
+      chrome.tabs.create({ url: lastFailedUrl });
+    }
   });
 
   const stage = $('#stage');

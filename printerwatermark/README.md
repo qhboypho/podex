@@ -50,7 +50,9 @@ printerwatermark/
 ├── manifest.json          # MV3 config
 ├── background.js          # Service worker:
 │                          #  - webRequest.onHeadersReceived: phát hiện main frame
-│                          #    trả Content-Type application/pdf -> redirect sang viewer
+│                          #    trả PDF theo Content-Type (application/pdf hoặc
+│                          #    binary kiểu octet-stream mà Chrome tự sniff ra PDF,
+│                          #    vd link awbprint của Shopee) -> redirect sang viewer
 │                          #  - nhận PDF (base64) từ content script, mở viewer
 │                          #  - fetch PDF theo URL (có cookie) cho viewer
 │                          #  - phục vụ popup: nhận diện/đóng dấu tab PDF hiện tại
@@ -64,11 +66,12 @@ printerwatermark/
 ```
 
 **Luồng hoạt động (link như TikTok):** bấm In trên sàn → tab mới điều hướng tới URL
-PDF → `webRequest.onHeadersReceived` thấy `Content-Type: application/pdf` → tab được
-chuyển hướng sang `viewer/viewer.html?url=...` → viewer nhờ background fetch lại URL
-(kèm cookie đăng nhập) → render bằng pdf.js, vẽ watermark lên lớp canvas overlay →
-in bằng `window.print()` (khổ giấy tự set theo đúng kích thước phiếu) hoặc tải PDF
-(ghép ảnh trang đã đóng dấu bằng pdf-lib).
+PDF → `webRequest.onHeadersReceived` thấy response PDF (Content-Type `application/pdf`
+hoặc kiểu binary như `octet-stream` mà Chrome sẽ tự sniff ra PDF — vd link AWB của
+Shopee) → tab được chuyển hướng sang `viewer/viewer.html?url=...` → viewer nhờ
+background fetch lại URL (kèm cookie đăng nhập) → render bằng pdf.js, vẽ watermark
+lên lớp canvas overlay → in bằng `window.print()` (khổ giấy tự set theo đúng kích
+thước phiếu) hoặc tải PDF (ghép ảnh trang đã đóng dấu bằng pdf-lib).
 
 **Luồng blob:** sàn mở PDF dạng `blob:` → content script đọc blob (cùng origin),
 kiểm tra magic bytes `%PDF`, chuyển base64 gửi background → mở viewer.
@@ -79,4 +82,6 @@ kiểm tra magic bytes `%PDF`, chuyển base64 gửi background → mở viewer.
   hệt bản xem trước).
 - Link PDF một-lần/nhanh hết hạn: viewer fetch lại ngay sau khi redirect nên vẫn hoạt
   động; nếu hết hạn thật sự, kéo thả file PDF vào viewer hoặc bấm **Chọn PDF** để in thủ công.
+- Nút **Mở link bằng tab thường** trên màn lỗi sẽ mở link gốc mà không bị extension
+  chặn lại (bypass trong 2 phút).
 - Nếu trang sàn nhúng PDF trong iframe (không mở tab mới), dùng kéo thả/chọn file thủ công.
