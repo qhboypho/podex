@@ -242,11 +242,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
       if (!msg || typeof msg !== 'object') return;
 
-      if (msg.type === 'PW_OPEN_PDF') {
+      if (msg.type === 'PW_OPEN_PDF' || msg.type === 'PW_OPEN_PDF_IN_TAB') {
         const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         await putPending(id, { data: msg.data, name: msg.name || 'don-hang.pdf' });
-        const tab = await chrome.tabs.create({ url: viewerUrl({ src: 'data', id }) });
         setTimeout(() => dropPending(id), 10 * 60 * 1000);
+        const tabId = sender && sender.tab && typeof sender.tab.id === 'number' && sender.tab.id >= 0
+          ? sender.tab.id
+          : null;
+        if (msg.type === 'PW_OPEN_PDF_IN_TAB' && tabId !== null) {
+          try {
+            await chrome.tabs.update(tabId, { url: viewerUrl({ src: 'data', id }) });
+            sendResponse({ ok: true, tabId });
+            return;
+          } catch (e) {
+          }
+        }
+        const tab = await chrome.tabs.create({ url: viewerUrl({ src: 'data', id }) });
         sendResponse({ ok: true, tabId: tab.id });
         return;
       }

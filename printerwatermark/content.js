@@ -105,4 +105,77 @@
     } catch (e) {
     }
   }, true);
+
+  // Sàn (Shopee awbprint...) nhúng PDF blob vào iframe trong trang ->
+  // không có navigation main frame nào để bắt, nên phải quan sát DOM.
+  const SELLER_HOST_RE = /^(banhang\.shopee\.vn|seller[a-z0-9-]*\.shopee\.[a-z.]+|sellercenter\.lazada\.[a-z.]+|seller[a-z0-9-]*\.lazada\.[a-z.]+|gsp\.lazada\.[a-z.]+|seller[a-z0-9-]*\.tiktok\.com)$/i;
+  const handledFrameSrc = new Set();
+
+  function isSellerHost() {
+    try {
+      return SELLER_HOST_RE.test(location.hostname);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function hijackPdfFrame(rawUrl) {
+    if (window.top !== window || !isSellerHost()) return;
+    if (!rawUrl || !/^(blob:|https?:)/i.test(rawUrl) || handledFrameSrc.has(rawUrl)) return;
+    (async () => {
+      if (!(await isEnabled())) return;
+      handledFrameSrc.add(rawUrl);
+      try {
+        const resp = await fetch(rawUrl);
+        const blob = await resp.blob();
+        if (!(await isPdfBlob(blob))) return;
+        const data = await blobToBase64(blob);
+        chrome.runtime.sendMessage({ type: 'PW_OPEN_PDF_IN_TAB', data, name: 'don-hang.pdf' });
+      } catch (e) {
+      }
+    })();
+  }
+
+  function scanFrameEl(el) {
+    try {
+      if (!el || !el.tagName) return;
+      const tag = el.tagName.toUpperCase();
+      if (tag !== 'IFRAME' && tag !== 'EMBED' && tag !== 'OBJECT') return;
+      const u = el.getAttribute('src') || el.getAttribute('data') || '';
+      hijackPdfFrame(u);
+    } catch (e) {
+    }
+  }
+
+  function scanTree(root) {
+    try {
+      if (root && root.nodeType === 1) scanFrameEl(root);
+      if (root && root.querySelectorAll) {
+        const els = root.querySelectorAll('iframe[src],embed[src],object[data]');
+        for (const el of els) scanFrameEl(el);
+      }
+    } catch (e) {
+    }
+  }
+
+  if (isSellerHost() && window.top === window) {
+    try {
+      const mo = new MutationObserver(muts => {
+        for (const m of muts) {
+          if (m.type === 'childList') {
+            for (const n of m.addedNodes) scanTree(n);
+          } else if (m.type === 'attributes') {
+            scanFrameEl(m.target);
+          }
+        }
+      });
+      mo.observe(document.documentElement || document, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data']
+      });
+    } catch (e) {
+    }
+    scanTree(document);
+    document.addEventListener('DOMContentLoaded', () => scanTree(document));
+    setTimeout(() => scanTree(document), 1500);
+  }
 })();

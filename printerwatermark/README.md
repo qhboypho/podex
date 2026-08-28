@@ -57,7 +57,10 @@ printerwatermark/
 │                          #  - fetch PDF theo URL (có cookie) cho viewer
 │                          #  - phục vụ popup: nhận diện/đóng dấu tab PDF hiện tại
 ├── content.js             # Hook window.open + click <a> trên trang sàn,
-│                          # phát hiện PDF dạng blob:/...pdf -> gửi sang viewer
+│                          # phát hiện PDF dạng blob:/...pdf -> gửi sang viewer;
+│                          # trên domain sàn: quan sát iframe/embed/object chứa
+│                          # PDF blob (kiểu trang awbprint của Shopee) -> chuyển
+│                          # tab sang viewer
 ├── viewer/
 │   ├── viewer.html/css/js # Trình xem PDF + editor watermark + in/tải
 ├── popup/                 # Bật/tắt chặn PDF, đóng dấu tab hiện tại, mở viewer
@@ -75,6 +78,12 @@ thước phiếu) hoặc tải PDF (ghép ảnh trang đã đóng dấu bằng p
 
 **Luồng blob:** sàn mở PDF dạng `blob:` → content script đọc blob (cùng origin),
 kiểm tra magic bytes `%PDF`, chuyển base64 gửi background → mở viewer.
+
+**Luồng Shopee (awbprint):** Shopee tự custom trang in — tải PDF bằng XHR rồi nhúng
+vào `<iframe src="blob:...">` ngay trong trang, không có navigation nào để bắt ở mức
+header. Content script trên các domain sàn (Shopee, Lazada, TikTok Seller) quan sát
+DOM: thấy iframe/embed/object mang src PDF (blob:/https) là đọc thử bytes, đúng PDF
+thì chuyển luôn tab đó sang viewer để đóng dấu.
 
 ## Ghi chú
 
