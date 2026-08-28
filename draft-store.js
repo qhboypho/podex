@@ -3,9 +3,11 @@
 
   const DATABASE_NAME = 'form-fashion-compositor';
   // v2: thêm store 'baseLibrary' cho thư viện phôi (nâng cấp mượt từ v1).
-  const DATABASE_VERSION = 2;
+  // v3: thêm store 'artworkLibrary' cho thư viện artwork.
+  const DATABASE_VERSION = 3;
   const STORE_NAME = 'workspaces';
   const LIBRARY_STORE = 'baseLibrary';
+  const ARTWORK_STORE = 'artworkLibrary';
   const WORKSPACE_ID = 'current';
 
   function requestAsPromise(request) {
@@ -30,6 +32,7 @@
       const database = request.result;
       if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME, { keyPath: 'id' });
       if (!database.objectStoreNames.contains(LIBRARY_STORE)) database.createObjectStore(LIBRARY_STORE, { keyPath: 'id' });
+      if (!database.objectStoreNames.contains(ARTWORK_STORE)) database.createObjectStore(ARTWORK_STORE, { keyPath: 'id' });
     };
     return requestAsPromise(request);
   }
@@ -121,4 +124,56 @@
   }
 
   globalThis.FormBaseLibrary = { listBases, saveBase, updateBase, deleteBase };
+
+  // ─── Thư viện artwork ─────────────────────────────────────────────────────
+  // Tương tự thư viện phôi: mỗi entry nhớ blob, metadata và scale/kind lần
+  // cuối người dùng chỉnh để bấm vào là dùng lại đúng kích thước.
+  async function listArtworks() {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(ARTWORK_STORE, 'readonly');
+      const entries = await requestAsPromise(transaction.objectStore(ARTWORK_STORE).getAll());
+      await transactionAsPromise(transaction);
+      return entries || [];
+    } finally {
+      database.close();
+    }
+  }
+
+  async function saveArtwork(entry) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(ARTWORK_STORE, 'readwrite');
+      transaction.objectStore(ARTWORK_STORE).put(entry);
+      await transactionAsPromise(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  async function updateArtwork(id, patch) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(ARTWORK_STORE, 'readwrite');
+      const store = transaction.objectStore(ARTWORK_STORE);
+      const existing = await requestAsPromise(store.get(id));
+      if (existing) store.put({ ...existing, ...patch, id });
+      await transactionAsPromise(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  async function deleteArtwork(id) {
+    const database = await openDatabase();
+    try {
+      const transaction = database.transaction(ARTWORK_STORE, 'readwrite');
+      transaction.objectStore(ARTWORK_STORE).delete(id);
+      await transactionAsPromise(transaction);
+    } finally {
+      database.close();
+    }
+  }
+
+  globalThis.FormArtworkLibrary = { listArtworks, saveArtwork, updateArtwork, deleteArtwork };
 })();

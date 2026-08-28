@@ -4,6 +4,7 @@
   const Core = globalThis.FormCore;
   const DraftStore = globalThis.FormDraftStore;
   const BaseLibrary = globalThis.FormBaseLibrary;
+  const ArtworkLibrary = globalThis.FormArtworkLibrary;
   const FabricEngine = globalThis.FormFabricEngine;
   const ChromaKey = globalThis.FormChromaKey;
   const Icons = globalThis.FormIcons;
@@ -47,6 +48,9 @@
     baseLibraryGrid: $('#baseLibraryGrid'),
     baseLibraryCount: $('#baseLibraryCount'),
     baseLibraryMessage: $('#baseLibraryMessage'),
+    artworkLibraryGrid: $('#artworkLibraryGrid'),
+    artworkLibraryCount: $('#artworkLibraryCount'),
+    artworkLibraryMessage: $('#artworkLibraryMessage'),
     baseLockToggle: $('#baseLockToggle'),
     baseLockLabel: $('#baseLockLabel'),
     clearDraft: $('#clearDraft'),
@@ -245,6 +249,11 @@
   let libraryEntries = [];
   let currentLibraryBaseId = null;
   const libraryUrls = new Map();
+  // Thư viện artwork: entry { id, name, blob, metadata, transform:{scale}, kind }.
+  // overlayLibraryIds ánh xạ overlayId → entryId để đồng bộ scale khi chỉnh.
+  let artworkLibraryEntries = [];
+  const overlayLibraryIds = {};
+  const artworkLibraryUrls = new Map();
 
   // ─── Blend/fabric params (live + export) ─────────────────────────────────
   const blendParams = {
@@ -777,6 +786,7 @@
       delete artworkUrls[overlayId];
     }
     delete artworkBlobs[overlayId];
+    delete overlayLibraryIds[overlayId];
     // Remove DOM node if exists
     const node = _overlayNodes.get(overlayId);
     if (node) { node.remove(); _overlayNodes.delete(overlayId); }
@@ -833,6 +843,7 @@
       draft: Core.serializeDraft(scene),
       viewport: workspaceView,
       baseLibraryId: currentLibraryBaseId,
+      overlayLibraryIds: { ...overlayLibraryIds },
       assets: {
         base: fileBlobs.base,
         background: fileBlobs.background,
@@ -876,6 +887,7 @@
         return false;
       }
       void syncCurrentBaseToLibrary();
+      void syncArtworkLibrary();
       draftDirty = false;
       const time = formatSavedTime();
       stampDraft(`${silent ? 'ĐÃ TỰ LƯU' : 'ĐÃ LƯU'} ${time}`);
@@ -931,6 +943,7 @@
       const stored = await DraftStore.load();
       if (!stored || (stored.version !== 1 && stored.version !== 2) || !stored.draft) return;
       currentLibraryBaseId = stored.baseLibraryId ?? null;
+      Object.assign(overlayLibraryIds, stored.overlayLibraryIds || {});
       const assets = stored.assets || {};
       const base = await restoreAsset('base', assets.base);
       const background = await restoreAsset('background', assets.background);
@@ -1107,6 +1120,137 @@
     setStatus('Đã đổi phôi từ thư viện');
   }
 
+  // ── Thư viện artwork: tải, render, áp vào overlay ─────────────────────────
+  async function loadArtworkLibrary() {
+    if (!ArtworkLibrary) return;
+    try {
+      artworkLibraryEntries = await ArtworkLibrary.listArtworks();
+    } catch {
+      artworkLibraryEntries = [];
+    }
+    renderArtworkLibrary();
+  }
+
+  function artworkLibraryThumbUrl(entry) {
+    if (!artworkLibraryUrls.has(entry.id)) {
+      artworkLibraryUrls.set(entry.id, URL.createObjectURL(entry.blob));
+    }
+    return artworkLibraryUrls.get(entry.id);
+  }
+
+  function renderArtworkLibrary() {
+    if (!element.artworkLibraryGrid) return;
+    element.artworkLibraryCount.textContent = artworkLibraryEntries.length ? `· ${artworkLibraryEntries.length}` : '';
+    if (!artworkLibraryEntries.length) {
+      element.artworkLibraryGrid.innerHTML = '<div class="artwork-library-empty">Chưa có artwork nào — tải lên sẽ được lưu vào đây để dùng lại.</div>';
+      return;
+    }
+    let html = '';
+    for (const entry of artworkLibraryEntries) {
+      html += `<button class="artwork-library-item" data-artlib-id="${entry.id}" type="button" title="${escapeHtml(entry.name)}${entry.transform ? ` · ${Math.round(entry.transform.scale * 34)}cm` : ''}">`
+        + `<img src="${artworkLibraryThumbUrl(entry)}" alt="" />`
+        + `<span class="artwork-library-remove" data-artlib-remove="${entry.id}" title="Xóa khỏi thư viện">✕</span>`
+        + `</button>`;
+    }
+    element.artworkLibraryGrid.innerHTML = html;
+
+    element.artworkLibraryGrid.querySelectorAll('.artwork-library-item').forEach((item) => {
+      item.addEventListener('click', (event) => {
+        if (event.target.closest('[data-artlib-remove]')) return;
+        const entry = artworkLibraryEntries.find((candidate) => String(candidate.id) === item.dataset.artlibId);
+        if (entry) void applyArtworkFromLibrary(entry);
+      });
+    });
+    element.artworkLibraryGrid.querySelectorAll('[data-artlib-remove]').forEach((button) => {
+      button.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const id = button.dataset.artlibRemove;
+        artworkLibraryEntries = artworkLibraryEntries.filter((entry) => String(entry.id) !== id);
+        for (const [overlayId, entryId] of Object.entries(overlayLibraryIds)) {
+          if (String(entryId) === id) delete overlayLibraryIds[overlayId];
+        }
+        const url = artworkLibraryUrls.get(id);
+        if (url) { URL.revokeObjectURL(url); artworkLibraryUrls.delete(id); }
+        try { await ArtworkLibrary.deleteArtwork(id); } catch {}
+        renderArtworkLibrary();
+        showToast('Đã xóa artwork khỏi thư viện.');
+      });
+    });
+  }
+
+  async function addArtworkToLibrary(blob, name, metadata, overlayId) {
+    if (!ArtworkLibrary) return null;
+    const overlay = Core.getOverlayById(scene, overlayId);
+    const entry = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      name,
+      blob,
+      metadata,
+      transform: { scale: overlay ? overlay.scale : 1 },
+      kind: overlay ? overlay.kind : 'print',
+    };
+    try {
+      await ArtworkLibrary.saveArtwork(entry);
+      artworkLibraryEntries = [...artworkLibraryEntries, entry];
+      overlayLibraryIds[overlayId] = entry.id;
+      renderArtworkLibrary();
+      return entry;
+    } catch {
+      return null;
+    }
+  }
+
+  // Đồng bộ scale/kind hiện tại của mọi overlay gắn với thư viện.
+  async function syncArtworkLibrary() {
+    if (!ArtworkLibrary) return;
+    const allOverlays = [...scene.overlays, ...scene.backOverlays];
+    const dirty = new Map();
+    for (const overlay of allOverlays) {
+      const entryId = overlayLibraryIds[overlay.id];
+      if (!entryId || !overlay.artwork?.src) continue;
+      const entry = artworkLibraryEntries.find((candidate) => candidate.id === entryId);
+      if (!entry) continue;
+      const patch = { transform: { scale: overlay.scale }, kind: overlay.kind };
+      if (entry.transform?.scale === overlay.scale && entry.kind === overlay.kind) continue;
+      entry.transform = { ...patch.transform };
+      entry.kind = overlay.kind;
+      dirty.set(entryId, patch);
+    }
+    for (const [entryId, patch] of dirty) {
+      try { await ArtworkLibrary.updateArtwork(entryId, patch); } catch {}
+    }
+  }
+
+  async function applyArtworkFromLibrary(entry) {
+    await syncArtworkLibrary();
+    const currentActive = Core.getActiveOverlay(scene);
+    if (currentActive && currentActive.artwork?.src) {
+      scene = Core.addOverlay(scene);
+    } else if (!currentActive) {
+      scene = Core.addOverlay(scene);
+    }
+    const targetOverlay = Core.getActiveOverlay(scene);
+    if (!targetOverlay) return;
+    const url = URL.createObjectURL(entry.blob);
+    const artLabel = entry.name.replace(/\.[^/.]+$/, '').slice(0, 18).toUpperCase();
+    scene = Core.updateOverlay(scene, {
+      artwork: { name: entry.name, src: url, metadata: entry.metadata, label: artLabel },
+      kind: entry.kind || 'print',
+    }, targetOverlay.id);
+    if (entry.transform?.scale) {
+      scene = Core.resizeOverlay(scene, entry.transform.scale, targetOverlay.id);
+    }
+    artworkUrls[targetOverlay.id] = url;
+    artworkBlobs[targetOverlay.id] = { blob: entry.blob, name: entry.name, metadata: entry.metadata };
+    overlayLibraryIds[targetOverlay.id] = entry.id;
+    artworkSelected = true;
+    baseSelected = false;
+    markDirty();
+    render();
+    setMessage(element.artworkMessage, `Đã dùng lại "${entry.name}"${entry.transform ? ` với size đã lưu (${Math.round(entry.transform.scale * 34)}cm)` : ''}.`, 'success');
+    setStatus('Đã thêm artwork từ thư viện');
+  }
+
   async function uploadImage(file, kind) {
     const target = typeMessageTarget(kind);
     const validation = Core.validateImageFile(file);
@@ -1184,6 +1328,8 @@
         scene = Core.updateOverlay(scene, { artwork }, targetOverlay.id);
         artworkUrls[targetOverlay.id] = artSrc;
         artworkBlobs[targetOverlay.id] = { blob: artBlob, name: artName, metadata };
+        // Lưu artwork vào thư viện để lần sau bấm là dùng lại đúng size.
+        await addArtworkToLibrary(artBlob, artName, metadata, targetOverlay.id);
         artworkSelected = true;
         baseSelected = false;
         const total = Core.getOverlays(scene).length;
@@ -4175,8 +4321,10 @@
 
   (async () => {
     await loadBaseLibrary();
+    await loadArtworkLibrary();
     await restoreWorkspace();
     renderBaseLibrary();
+    renderArtworkLibrary();
     await preloadWatermarkFonts();
     // Vẽ lại watermark bằng scene đã khôi phục + font đã sẵn sàng.
     // Font local trong Chromium đôi khi chỉ rasterize đúng ở lần vẽ canvas

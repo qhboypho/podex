@@ -646,7 +646,7 @@ function applyDraft(scene, draft) {
   next = setLogo(next, draft.logo || {});
   next = setBaseTransform(next, draft.baseTransform, { moveAttached: false });
 
-  if (draft.version === 2 && Array.isArray(draft.overlays)) {
+  if (draft.version >= 2 && Array.isArray(draft.overlays)) {
     // v2: restore arrays of overlays
     // Rebuild overlays from draft, keeping ids
     const restoreList = (draftList, side) => draftList.map(d => {
