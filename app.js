@@ -213,6 +213,9 @@
     // Theme toggle
     themeLight: $('#themeLight'),
     themeDark: $('#themeDark'),
+    // Undo / Redo
+    undoButton: $('#undoButton'),
+    redoButton: $('#redoButton'),
   };
 
   const presetNames = {
@@ -394,10 +397,127 @@
   }
 
   function markDirty() {
+    trackUndoHistory();
     draftDirty = true;
     workspaceRevision += 1;
     stampDraft('ĐANG TỰ LƯU');
     scheduleAutoSave();
+  }
+
+  // ─── Undo / Redo (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) ─────────────────────────
+  // Mỗi "burst" thay đổi (kéo, slider, gõ chữ…) gộp thành một bước: bước được
+  // ghi là trạng thái NGAY TRƯỚC burst — đánh dấu bằng cờ stable (timer 600ms
+  // sau lần thay đổi cuối) thay vì so thời gian, để không bỏ sót bước nào.
+  const HISTORY_COALESCE = 600;
+  const HISTORY_LIMIT = 100;
+  const HISTORY_TRANSIENT = ['activeDecor', 'activeOverlayId', 'multiDecor', 'view'];
+  let undoStack = [];
+  let redoStack = [];
+  let pendingBase = null; // snapshot ổn định gần nhất (trước burst hiện tại)
+  let stableSinceLastChange = true;
+  let pendingBaseTimer = 0;
+  // URL thu hồi hoãn lại: undo có thể trỏ về ảnh cũ nên chỉ thu hồi khi đóng trang.
+  const deferredRevokes = new Set();
+
+  pendingBase = historyKey(scene);
+
+  function historyKey(target) {
+    const copy = { ...target };
+    for (const key of HISTORY_TRANSIENT) delete copy[key];
+    return JSON.stringify(copy);
+  }
+
+  function revokeLater(url) {
+    if (url) deferredRevokes.add(url);
+  }
+
+  function scheduleStableSnapshot() {
+    clearTimeout(pendingBaseTimer);
+    pendingBaseTimer = setTimeout(() => {
+      pendingBase = historyKey(scene);
+      stableSinceLastChange = true;
+      updateUndoRedoButtons();
+    }, HISTORY_COALESCE);
+  }
+
+  function trackUndoHistory() {
+    const key = historyKey(scene);
+    if (pendingBase === key) return; // không có gì thay đổi so với snapshot gần nhất
+    if (stableSinceLastChange) {
+      // Thay đổi đầu tiên của burst: ghi lại trạng thái TRƯỚC thay đổi.
+      undoStack.push(pendingBase);
+      if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+      redoStack = [];
+      // Chỉ mất trạng thái stable khi thật sự ghi bước undo — thay đổi không
+      // ảnh hưởng nội dung (chọn layer…) không được làm mất bước undo kế tiếp.
+      stableSinceLastChange = false;
+      updateUndoRedoButtons();
+    }
+    scheduleStableSnapshot();
+  }
+
+  function restoreHistorySnapshot(snapshot) {
+    if (inlineTextEdit) finishInlineTextEdit(false);
+    if (decorDrag) return;
+    const restored = JSON.parse(snapshot);
+    // Giữ navigation/selection hiện tại — undo chỉ hoàn tác nội dung.
+    restored.view = scene.view;
+    restored.activeDecor = scene.activeDecor;
+    restored.activeOverlayId = scene.activeOverlayId;
+    restored.multiDecor = scene.multiDecor;
+    scene = withLegacyScene(restored);
+    // Đổi state bằng undo không phải một burst mới — chặn tracking cho lần
+    // markDirty kế tiếp, rồi bật lại cờ stable để thay đổi tiếp theo của
+    // người dùng được ghi đúng bước undo riêng.
+    stableSinceLastChange = false;
+    markDirty();
+    pendingBase = historyKey(scene);
+    stableSinceLastChange = true;
+    render();
+    updateUndoRedoButtons();
+  }
+
+  function withLegacyScene(target) {
+    target.overlay = target.overlays?.[0] || null;
+    target.backOverlay = target.backOverlays?.[0] || null;
+    return target;
+  }
+
+  function undoHistory() {
+    if (!undoStack.length) return;
+    redoStack.push(historyKey(scene));
+    restoreHistorySnapshot(undoStack.pop());
+  }
+
+  function redoHistory() {
+    if (!redoStack.length) return;
+    undoStack.push(historyKey(scene));
+    restoreHistorySnapshot(redoStack.pop());
+  }
+
+  function updateUndoRedoButtons() {
+    if (element.undoButton) element.undoButton.disabled = undoStack.length === 0;
+    if (element.redoButton) element.redoButton.disabled = redoStack.length === 0;
+  }
+
+  element.undoButton?.addEventListener('click', () => undoHistory());
+  element.redoButton?.addEventListener('click', () => redoHistory());
+  // Test hook: soi nội dung history trong test tự động.
+  if (typeof window !== 'undefined') {
+    window.__undoDebug = () => ({
+      undo: undoStack.map((snapshot) => {
+        const state = JSON.parse(snapshot);
+        const first = state.textItems[0];
+        return { text: state.textItems.length, art: state.overlays.filter((ov) => ov.artwork?.src).length, xy: first ? [first.x, first.y] : null, content: first ? first.content : null };
+      }),
+      redo: redoStack.map((snapshot) => {
+        const state = JSON.parse(snapshot);
+        const first = state.textItems[0];
+        return { text: state.textItems.length, art: state.overlays.filter((ov) => ov.artwork?.src).length, xy: first ? [first.x, first.y] : null, content: first ? first.content : null };
+      }),
+      pendingText: pendingBase ? JSON.parse(pendingBase).textItems.length : -1,
+      stable: stableSinceLastChange,
+    });
   }
 
   function makeAsset(file, metadata) {
@@ -433,7 +553,7 @@
     const url = URL.createObjectURL(blob);
     const prev = artworkUrls[overlayId];
     artworkUrls[overlayId] = url;
-    if (prev && prev !== url) URL.revokeObjectURL(prev);
+    if (prev && prev !== url) revokeLater(prev);
     return url;
   }
 
@@ -791,13 +911,8 @@
   }
 
   function removeArtworkOverlay(overlayId) {
-    // Cleanup blob/url for this overlay
-    if (artworkUrls[overlayId]) {
-      URL.revokeObjectURL(artworkUrls[overlayId]);
-      delete artworkUrls[overlayId];
-    }
-    delete artworkBlobs[overlayId];
-    delete overlayLibraryIds[overlayId];
+    // Giữ blob/url/mapping để Undo có thể khôi phục lớp đã xóa; thu hồi khi đóng trang.
+    if (artworkUrls[overlayId]) revokeLater(artworkUrls[overlayId]);
     // Remove DOM node if exists
     const node = _overlayNodes.get(overlayId);
     if (node) { node.remove(); _overlayNodes.delete(overlayId); }
@@ -815,7 +930,7 @@
   function replaceObjectUrl(key, nextUrl) {
     const previousUrl = fileUrls[key];
     fileUrls[key] = nextUrl;
-    if (previousUrl && previousUrl !== nextUrl) URL.revokeObjectURL(previousUrl);
+    if (previousUrl && previousUrl !== nextUrl) revokeLater(previousUrl);
   }
 
   function decodeImage(src) {
@@ -3403,8 +3518,8 @@
       const artLabel = artName.replace(/\.[^/.]+$/, '').slice(0, 18).toUpperCase();
       const artwork = { name: artName, src: artSrc, metadata, label: artLabel };
       scene = Core.updateOverlay(scene, { artwork }, activeOverlay.id);
-      // Replace blob/url tracking
-      if (artworkUrls[activeOverlay.id] && artworkUrls[activeOverlay.id] !== artSrc) URL.revokeObjectURL(artworkUrls[activeOverlay.id]);
+      // Replace blob/url tracking — hoãn revoke để Undo khôi phục được ảnh cũ
+      if (artworkUrls[activeOverlay.id] && artworkUrls[activeOverlay.id] !== artSrc) revokeLater(artworkUrls[activeOverlay.id]);
       artworkUrls[activeOverlay.id] = artSrc;
       artworkBlobs[activeOverlay.id] = { blob: artBlob, name: artName, metadata };
       markDirty();
@@ -3456,7 +3571,7 @@
       }, active.id);
       artworkUrls[active.id] = newSrc;
       artworkBlobs[active.id] = { blob, name: newName, metadata: asset.metadata };
-      if (prevSrc && prevSrc !== newSrc) URL.revokeObjectURL(prevSrc);
+      if (prevSrc && prevSrc !== newSrc) revokeLater(prevSrc);
       // Xoá cache ảnh để preview/warp nạp lại bản mới.
       if (prevSrc) _imageCache.delete(prevSrc);
       markDirty();
@@ -3882,7 +3997,7 @@
 
   element.resetBase.addEventListener('click', () => {
     invalidatePending('base');
-    if (fileUrls.base) URL.revokeObjectURL(fileUrls.base);
+    revokeLater(fileUrls.base);
     fileUrls.base = null;
     fileBlobs.base = null;
     garmentDispCache = null;
@@ -3910,7 +4025,7 @@
   $$('.swatch').forEach((swatch) => swatch.addEventListener('click', () => {
     const value = swatch.dataset.background;
     invalidatePending('background');
-    if (fileUrls.background) URL.revokeObjectURL(fileUrls.background);
+    revokeLater(fileUrls.background);
     fileUrls.background = null;
     fileBlobs.background = null;
     scene = Core.setBackground(scene, { kind: 'preset', value, name: presetNames[value] });
@@ -4338,11 +4453,25 @@
     if (event.key !== 'Escape' || brushState.active || inlineTextEdit) return;
     deselectAllSelections();
   });
+  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: undo-redo chung (khi cọ bật, undo mask riêng).
+  window.addEventListener('keydown', (event) => {
+    if (brushState.active || inlineTextEdit) return;
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      undoHistory();
+    } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
+      event.preventDefault();
+      redoHistory();
+    }
+  });
   window.addEventListener('pointerup', flushAutoSave);
   window.addEventListener('pagehide', () => {
     flushAutoSave();
     Object.values(fileUrls).filter(Boolean).forEach((url) => URL.revokeObjectURL(url));
     Object.values(artworkUrls).filter(Boolean).forEach((url) => URL.revokeObjectURL(url));
+    deferredRevokes.forEach((url) => URL.revokeObjectURL(url));
   });
 
   render();
