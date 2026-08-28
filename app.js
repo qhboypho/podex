@@ -2087,30 +2087,59 @@
     requestAnimationFrame(runFabricPreview);
   }
 
+  // Box blur separable cho trường vô hướng (giống blurLuminance của FabricEngine).
+  function blurScalarField(field, width, height, radius) {
+    const horizontal = new Float32Array(field.length);
+    const output = new Float32Array(field.length);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        let total = 0;
+        for (let offset = -radius; offset <= radius; offset += 1) {
+          total += field[y * width + Math.min(width - 1, Math.max(0, x + offset))];
+        }
+        horizontal[y * width + x] = total / (radius * 2 + 1);
+      }
+    }
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        let total = 0;
+        for (let offset = -radius; offset <= radius; offset += 1) {
+          total += horizontal[Math.min(height - 1, Math.max(0, y + offset)) * width + x];
+        }
+        output[y * width + x] = total / (radius * 2 + 1);
+      }
+    }
+    return output;
+  }
+
   // Build Sobel displacement map from garment luminance (same as garment-blend.html)
   function buildDispMap(garmentCanvas) {
     const W = garmentCanvas.width, H = garmentCanvas.height;
     const tmpCtx = garmentCanvas.getContext('2d', { willReadFrequently: true });
     const idata = tmpCtx.getImageData(0, 0, W, H);
     const d = idata.data;
-    const lum = new Float32Array(W * H);
-    for (let i = 0; i < W * H; i++) {
+    const size = W * H;
+    const lum = new Float32Array(size);
+    for (let i = 0; i < size; i++) {
       lum[i] = (0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]) / 255;
     }
-    const dxArr = new Float32Array(W * H);
-    const dyArr = new Float32Array(W * H);
-    const gradMag = new Float32Array(W * H); // normalized 0..1 fold intensity
+    // Làm mờ luminance trước khi tính Sobel: vệt tóc/nét gắt trên ảnh phôi
+    // không còn xé artwork thành những vạch cắt lởm chởm.
+    const smooth = blurScalarField(lum, W, H, Math.min(12, Math.max(1, Math.round(Math.min(W, H) / 90))));
+    const dxArr = new Float32Array(size);
+    const dyArr = new Float32Array(size);
+    const gradMag = new Float32Array(size); // normalized 0..1 fold intensity
     for (let y = 1; y < H - 1; y++) {
       for (let x = 1; x < W - 1; x++) {
         const idx = y * W + x;
         const gx = (
-          -lum[(y-1)*W+(x-1)] + lum[(y-1)*W+(x+1)]
-          -2*lum[y*W+(x-1)]   + 2*lum[y*W+(x+1)]
-          -lum[(y+1)*W+(x-1)] + lum[(y+1)*W+(x+1)]
+          -smooth[(y-1)*W+(x-1)] + smooth[(y-1)*W+(x+1)]
+          -2*smooth[y*W+(x-1)]   + 2*smooth[y*W+(x+1)]
+          -smooth[(y+1)*W+(x-1)] + smooth[(y+1)*W+(x+1)]
         ) / 4;
         const gy = (
-          -lum[(y-1)*W+(x-1)] - 2*lum[(y-1)*W+x] - lum[(y-1)*W+(x+1)]
-          +lum[(y+1)*W+(x-1)] + 2*lum[(y+1)*W+x] + lum[(y+1)*W+(x+1)]
+          -smooth[(y-1)*W+(x-1)] - 2*smooth[(y-1)*W+x] - smooth[(y-1)*W+(x+1)]
+          +smooth[(y+1)*W+(x-1)] + 2*smooth[(y+1)*W+x] + smooth[(y+1)*W+(x+1)]
         ) / 4;
         dxArr[idx] = gx;
         dyArr[idx] = gy;
@@ -2119,6 +2148,9 @@
     }
     return { dx: dxArr, dy: dyArr, lum, gradMag, W, H };
   }
+
+  // Test hook: đo trường displacement trong test tự động.
+  if (typeof window !== 'undefined') window.__buildDispMapTest = buildDispMap;
 
   async function runFabricPreview() {
     fabricPreviewPending = false;
@@ -2209,8 +2241,14 @@
           const gIdx = gy * W + gx;
 
           // ── Displacement: warp source sample by fabric gradient
-          const offX = Math.round(dx[gIdx] * strength);
-          const offY = Math.round(dy[gIdx] * strength);
+          // Giới hạn biên độ 10px: vùng gradient gắt (tóc, đường may) không
+          // xé artwork thành vạch, nếp gấp mềm vẫn giữ được độ cong.
+          const dispX = dx[gIdx] * strength;
+          const dispY = dy[gIdx] * strength;
+          const dispMag = Math.hypot(dispX, dispY);
+          const dispScale = dispMag > 10 ? 10 / dispMag : 1;
+          const offX = Math.round(dispX * dispScale);
+          const offY = Math.round(dispY * dispScale);
           const sx = Math.max(0, Math.min(bW - 1, px - offX));
           const sy = Math.max(0, Math.min(bH - 1, py - offY));
           const sIdx = (sy * bW + sx) * 4;
