@@ -25,6 +25,7 @@ const {
   removeIconItem,
   selectDecor,
   toggleOverlayHidden,
+  toggleOverlayLock,
   toggleDecorLock,
   toggleDecorHidden,
   groupDecorItems,
@@ -471,6 +472,30 @@ test('decorations follow the base transform like artwork overlays do', () => {
   const afterIcon = getIconItems(scene)[0];
   assert.equal(afterText.x, Math.round(beforeText.x + 10));
   assert.equal(Math.abs(afterIcon.y - (beforeIcon.y + 10)) < 3, true);
+});
+
+test('locked layers stay put when the base transform moves', () => {
+  let scene = createScene();
+  scene = addTextItem(scene);
+  scene = addIconItem(scene);
+  const textId = getTextItems(scene)[0].id;
+  const iconId = getIconItems(scene)[0].id;
+  const overlayId = scene.activeOverlayId;
+  scene = toggleDecorLock(scene, 'text', textId);
+  scene = toggleDecorLock(scene, 'icon', iconId);
+  scene = toggleOverlayLock(scene, overlayId);
+  const beforeText = getTextItems(scene)[0];
+  const beforeIcon = getIconItems(scene)[0];
+  const beforeOverlay = scene.overlays[0];
+  scene = setBaseTransform(scene, { x: 60, y: 60 });
+  const afterText = getTextItems(scene)[0];
+  const afterIcon = getIconItems(scene)[0];
+  assert.equal(afterText.x, beforeText.x);
+  assert.equal(afterText.y, beforeText.y);
+  assert.equal(afterIcon.x, beforeIcon.x);
+  assert.equal(afterIcon.y, beforeIcon.y);
+  assert.equal(scene.overlays[0].x, beforeOverlay.x);
+  assert.equal(scene.overlays[0].y, beforeOverlay.y);
 });
 
 test('serializes decorations without leaking anything beyond editable state', () => {

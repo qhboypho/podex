@@ -359,21 +359,31 @@ function setBaseTransform(scene, transform = {}, { moveAttached = true } = {}) {
     x: scene.safeArea.x + deltaX,
     y: scene.safeArea.y + deltaY,
   }, scene.safeArea);
-  const moveOverlayItem = (overlay) => constrainOverlayToCanvas({
-    ...overlay,
-    x: overlay.x + deltaX,
-    y: overlay.y + deltaY,
-  });
+  // Lớp bị khóa luôn đứng yên — khóa chặn cả việc đi theo phôi.
+  const moveOverlayItem = (overlay) => (overlay.locked
+    ? overlay
+    : constrainOverlayToCanvas({
+      ...overlay,
+      x: overlay.x + deltaX,
+      y: overlay.y + deltaY,
+    }));
+  const moveDecorItem = (items, constrain) => items.map((item) => (item.locked
+    ? item
+    : constrain({
+      ...item,
+      x: number(item.x, 50) + deltaX,
+      y: number(item.y, 50) + deltaY,
+    })));
   return withLegacy({
     ...scene,
     baseTransform,
     safeArea,
     overlays: scene.overlays.map(moveOverlayItem),
     backOverlays: scene.backOverlays.map(moveOverlayItem),
-    textItems: moveAllDecorItems(scene.textItems || [], deltaX, deltaY, constrainTextItem),
-    backTextItems: moveAllDecorItems(scene.backTextItems || [], deltaX, deltaY, constrainTextItem),
-    iconItems: moveAllDecorItems(scene.iconItems || [], deltaX, deltaY, constrainIconItem),
-    backIconItems: moveAllDecorItems(scene.backIconItems || [], deltaX, deltaY, constrainIconItem),
+    textItems: moveDecorItem(scene.textItems || [], constrainTextItem),
+    backTextItems: moveDecorItem(scene.backTextItems || [], constrainTextItem),
+    iconItems: moveDecorItem(scene.iconItems || [], constrainIconItem),
+    backIconItems: moveDecorItem(scene.backIconItems || [], constrainIconItem),
   });
 }
 
@@ -989,14 +999,6 @@ function duplicateDecorItem(scene, type, itemId) {
     ? constrainIconItem({ ...source, id: ++_decorIdCounter, x: source.x + 3, y: source.y + 3 })
     : constrainTextItem({ ...source, id: ++_decorIdCounter, x: source.x + 3, y: source.y + 3 });
   return { ...scene, [listKey]: [...list, clone], activeDecor: { type, id: clone.id } };
-}
-
-function moveAllDecorItems(items, deltaX, deltaY, constrain) {
-  return items.map((item) => constrain({
-    ...item,
-    x: number(item.x, 50) + deltaX,
-    y: number(item.y, 50) + deltaY,
-  }));
 }
 
 globalThis.FormCore = {
