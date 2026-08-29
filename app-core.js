@@ -63,7 +63,7 @@ function normalizeCanvasRatio(value) {
 
 const ARTWORK_BASE_WIDTH = 20.5;
 const ARTWORK_BASE_HEIGHT = ARTWORK_BASE_WIDTH / 1.19;
-const MIN_DIRECT_ARTWORK_SCALE = .35;
+const MIN_DIRECT_ARTWORK_SCALE = 0.1;
 const MAX_DIRECT_ARTWORK_SCALE = 3.2;
 const MAX_DIRECT_ARTWORK_ROTATION = 60;
 const SAFE_AREA_MARGIN = 4;
@@ -114,13 +114,13 @@ function normalizeSafeArea(area, fallback = DEFAULT_SAFE_AREA) {
 
 function constrainOverlayToSafeArea(overlay, safeArea) {
   const area = normalizeSafeArea(safeArea);
-  const requestedScale = clamp(number(overlay.scale, 1), 0.45, 1.5);
+  const requestedScale = clamp(number(overlay.scale, 1), 0.1, 1.5);
   const maxScale = Math.min(
     1.5,
     (area.width * .92) / ARTWORK_BASE_WIDTH,
     (area.height * .92) / ARTWORK_BASE_HEIGHT,
   );
-  const scale = round(Math.max(.45, Math.min(requestedScale, maxScale)), 3);
+  const scale = round(Math.max(.1, Math.min(requestedScale, maxScale)), 3);
   const halfWidth = (ARTWORK_BASE_WIDTH * scale) / 2;
   const halfHeight = (ARTWORK_BASE_HEIGHT * scale) / 2;
   return {
