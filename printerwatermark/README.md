@@ -93,4 +93,7 @@ thì chuyển luôn tab đó sang viewer để đóng dấu.
   động; nếu hết hạn thật sự, kéo thả file PDF vào viewer hoặc bấm **Chọn PDF** để in thủ công.
 - Nút **Mở link bằng tab thường** trên màn lỗi sẽ mở link gốc mà không bị extension
   chặn lại (bypass trong 2 phút).
+- Extension **không can thiệp** vào các trang đăng nhập/xác thực (Google, Microsoft,
+  Apple, Facebook, GitHub, OpenAI/Claude...) và các URL kiểu oauth/login — chống việc
+  nhận nhầm response trong luồng đăng nhập thành PDF.
 - Nếu trang sàn nhúng PDF trong iframe (không mở tab mới), dùng kéo thả/chọn file thủ công.

@@ -56,10 +56,11 @@
 
   const nativeOpen = window.open.bind(window);
   function hookedOpen(url, target, features) {
+    const s = String(url || '');
     try {
-      if (url && !String(url).startsWith(EXT_ORIGIN)) {
-        intercept(String(url)).then(blocked => {
-          if (!blocked) nativeOpen(url, target, features);
+      if (s && !s.startsWith(EXT_ORIGIN) && isPdfUrl(s)) {
+        intercept(s).then(blocked => {
+          if (!blocked) nativeOpen(s, target, features);
         });
         return {
           closed: false,
@@ -68,7 +69,7 @@
           blur() {},
           close() { this.closed = true; },
           print() {},
-          location: { href: url, reload() {}, replace() {} },
+          location: { href: s, reload() {}, replace() {} },
           postMessage() {},
           addEventListener() {},
           removeEventListener() {},

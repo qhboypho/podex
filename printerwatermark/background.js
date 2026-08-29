@@ -147,9 +147,32 @@ async function addRedirectRule(pdfUrl) {
   return shortId;
 }
 
+function isAuthLikeUrl(u) {
+  try {
+    const x = new URL(u);
+    if (/(^|\.)(google|googlemail|googleapis|gstatic|googleusercontent|microsoftonline|live|office|apple|icloud|facebook|github|okta|auth0|openai|anthropic|claude|cloudflareaccess)\.[a-z.]+$/i.test(x.hostname)) return true;
+    if (/\/(oauth2?|signin|sign-in|login|logout)(\/|$)/i.test(x.pathname)) return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+function pdfNameFromUrl(u) {
+  try {
+    const p = new URL(u).pathname.split('/').pop() || '';
+    const safe = p.replace(/[\\/:*?"<>|]+/g, '-').slice(0, 60);
+    return safe ? ( /\.pdf$/i.test(safe) ? safe : safe + '.pdf') : 'don-hang.pdf';
+  } catch (e) {
+    return 'don-hang.pdf';
+  }
+}
+
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (details.type !== 'main_frame' || details.tabId < 0) return;
+    if (details.documentLifecycle && details.documentLifecycle !== 'active') return;
+    if (isAuthLikeUrl(details.url)) return;
     let isPdf = false;
     let isSniffable = false;
     let isAttachment = false;
@@ -169,6 +192,19 @@ chrome.webRequest.onHeadersReceived.addListener(
     if (isAttachment) return;
     isInterceptEnabled().then(async enabled => {
       if (!enabled) return;
+      if (!isPdf) {
+        // Content-type binary chưa chắc là PDF: bắt buộc kiểm tra bytes trước khi chặn
+        const check = await fetchPdfBinary(details.url);
+        if (!check.ok) return;
+        const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        await putPending(id, { data: check.data, name: pdfNameFromUrl(details.url) });
+        setTimeout(() => dropPending(id), 10 * 60 * 1000);
+        try {
+          await chrome.tabs.update(details.tabId, { url: viewerUrl({ src: 'data', id }) });
+        } catch (e) {
+        }
+        return;
+      }
       try {
         await addRedirectRule(details.url);
         await chrome.tabs.update(details.tabId, { url: details.url });
@@ -182,6 +218,44 @@ chrome.webRequest.onHeadersReceived.addListener(
 );
 
 const retryStamp = new Map();
+
+// Service worker MV3 ngủ rồi thì setTimeout hết hạn rule không chạy ->
+// quét lại storage mỗi khi SW sống lại, xoá rule/nhạc cũ đã hết hạn.
+(async () => {
+  try {
+    const all = await chrome.storage.session.get(null);
+    const now = Date.now();
+    const removeRuleIds = [];
+    const removeKeys = [];
+    for (const [k, v] of Object.entries(all || {})) {
+      if (k.startsWith('pw_pdfurl_')) {
+        if (!v || !v.t || now - v.t > 3 * 60 * 1000) {
+          if (v && typeof v.ruleId === 'number') removeRuleIds.push(v.ruleId);
+          removeKeys.push(k);
+          const sid = k.slice('pw_pdfurl_'.length);
+          ruleMem.delete(sid);
+          urlMem.delete(sid);
+        }
+      }
+    }
+    if (removeRuleIds.length) {
+      await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds });
+    }
+    if (removeKeys.length) await chrome.storage.session.remove(removeKeys);
+    const m = (all && all.pwPdfTabs) || {};
+    let dirty = false;
+    for (const k of Object.keys(m)) {
+      if (!m[k] || !m[k].t || now - m[k].t > 15 * 60 * 1000) {
+        delete m[k];
+        dirty = true;
+      } else {
+        pdfTabs.set(Number(k), m[k]);
+      }
+    }
+    if (dirty) await chrome.storage.session.set({ pwPdfTabs: m });
+  } catch (e) {
+  }
+})();
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
