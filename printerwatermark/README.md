@@ -52,8 +52,9 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 - Extension **tự đặt tên theo ngày lưu**: `<sàn><ddmmyyyy>-<số thứ tự trong ngày>.pdf`,
   ví dụ `tiktok31082026-02.pdf` = file thứ 2 lưu trong ngày 31/08/2026 của sàn
   TikTok (đếm riêng theo từng sàn; xoá file trong ngày không làm trùng số).
-- Extension **tự đọc mã đơn (Order ID / mã vận đơn)** từ nội dung phiếu — tìm kiếm
-  history bằng mã vận đơn vẫn ra đúng đơn dù tên file đã đổi theo format ngày.
+- Extension **tự đọc mã đơn (Order ID / mã vận đơn)** và **tên sản phẩm** từ nội dung
+  phiếu đầu tiên — tìm kiếm bằng mã vận đơn hoặc tên sản phẩm đều ra đúng đơn;
+  tên sản phẩm hiển thị cuối mỗi dòng lịch sử.
 - Vào popup → **Lịch sử đơn đã in** để tìm lại: ô tìm kiếm khớp mã đơn, tên file,
   link gốc và tên sàn; lọc theo thời gian. Bấm vào dòng bất kỳ để mở lại đúng file.
 - Bấm **Xem & In** để mở lại đúng phiếu bằng trình watermark và in như thường;

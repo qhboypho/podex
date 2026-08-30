@@ -125,29 +125,35 @@ async function loadPdfBytes(bytes, name) {
   return ok;
 }
 
-async function extractOrderCodes() {
+async function extractOrderInfo() {
   try {
-    let text = '';
+    const texts = [];
     const max = Math.min(2, pdfDoc.numPages || 1);
     for (let i = 1; i <= max; i++) {
       const page = await pdfDoc.getPage(i);
       const tc = await page.getTextContent();
-      text += tc.items.map(it => it.str || '').join(' ') + '\n';
+      texts.push(tc.items.map(it => it.str || '').join(' '));
     }
+    const all = texts.join(' ');
     const found = [];
     const push = s => {
       if (s && !found.includes(s) && found.length < 4) found.push(s);
     };
-    const orderId = text.match(/order[\s_-]*id[:\s#]*([0-9]{8,25})/i);
+    const orderId = all.match(/order[\s_-]*id[:\s#]*([0-9]{8,25})/i);
     if (orderId) push(orderId[1]);
-    const carrier = text.match(/\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/i);
+    const carrier = all.match(/\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/i);
     if (carrier) push(carrier[1].toUpperCase());
     let m;
     const digitRe = /\b([0-9]{12,22})\b/g;
-    while ((m = digitRe.exec(text)) && found.length < 4) push(m[1]);
-    return found;
+    while ((m = digitRe.exec(all)) && found.length < 4) push(m[1]);
+
+    let prod = '';
+    const prodRe = /(?:product\s*name|t[êe]n\s*s[aả]n\s*ph[aẩ]m)\s*[:\-]?\s*(.{4,150}?)(?=\s+(?:seller\s+)?sku\b|\s+qty\b|\s+order\s+id\b|\s+nickname\b|\s+m[ãa]\s*(?:sp|s[aả]n\s*ph[aẩ]m)|\s+ph[aâ]n\s*lo[aạ]i\b|$)/i;
+    const pm = texts[0].match(prodRe);
+    if (pm) prod = pm[1].replace(/\s+/g, ' ').trim();
+    return { codes: found, prod };
   } catch (e) {
-    return [];
+    return { codes: [], prod: '' };
   }
 }
 
@@ -155,9 +161,9 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
   const ok = await loadPdfBytes(dataUrlToBytes(dataUrl), name);
   if (!ok || skipArchive || !dataUrl) return;
   try {
-    const codes = await extractOrderCodes();
+    const info = await extractOrderInfo();
     console.info('[PW] Lưu lịch sử:', name || docName, srcUrl || '(không có link)');
-    PWArchive.save(dataUrl, name || docName, srcUrl || '', codes.join(' '), name || docName)
+    PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod)
       .then(r => {
         if (r && r.ok && r.dup) toast('Đơn này đã có trong lịch sử.');
         else if (r && r.ok) toast('Đã lưu lịch sử: ' + (r.name || 'đơn'));

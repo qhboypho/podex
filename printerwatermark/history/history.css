@@ -137,6 +137,17 @@ button.mini { padding: 6px 10px; font-size: 12px; border-radius: 7px; }
   color: #188038;
 }
 
+.item .meta .prod {
+  display: inline-block;
+  max-width: 440px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: #333;
+  font-weight: 500;
+}
+
 .item .actions {
   display: flex;
   gap: 6px;

@@ -42,6 +42,7 @@ function matchQ(m, q) {
     (m.url || '').toLowerCase().includes(q) ||
     (m.code || '').toLowerCase().includes(q) ||
     (m.file || '').toLowerCase().includes(q) ||
+    (m.prod || '').toLowerCase().includes(q) ||
     (m.shop || '').toLowerCase().includes(q)
   );
 }
@@ -91,12 +92,14 @@ function buildItem(m) {
     { cls: 'time', text: fmtClock(m.savedAt) },
     { cls: 'shop', text: m.shop || '' },
     { cls: 'file', text: (m.file && m.file !== m.name) ? ('file: ' + m.file) : '' },
-    { cls: 'size', text: fmtSize(m.size) }
+    { cls: 'size', text: fmtSize(m.size) },
+    { cls: 'prod', text: m.prod || '' }
   ].filter(b => b.text);
   for (const b of bits) {
     const span = document.createElement('span');
     span.className = b.cls;
     span.textContent = b.text;
+    if (b.cls === 'prod') span.title = b.text;
     meta.append(span);
   }
   info.append(name, meta);
