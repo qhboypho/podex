@@ -3,10 +3,6 @@
 const $ = (s, el = document) => el.querySelector(s);
 let all = [];
 
-function fmtTime(t) {
-  try { return new Date(t).toLocaleString('vi-VN'); } catch (e) { return ''; }
-}
-
 function fmtSize(n) {
   if (!n) return '';
   if (n < 1024) return n + ' B';
@@ -19,44 +15,52 @@ function safePdfName(name) {
   return /\.pdf$/i.test(s) ? s : s + '.pdf';
 }
 
-function extractCode(url) {
-  if (!url) return '';
-  try {
-    const u = new URL(url);
-    for (const [k, v] of u.searchParams.entries()) {
-      if (/(awb|order|tracking|parcel|sn)/i.test(k) && /^[A-Za-z0-9._-]{6,60}$/.test(v)) return v;
-    }
-    const seg = u.pathname.split('/').filter(Boolean).pop() || '';
-    const m = seg.match(/^[A-Z0-9]{8,}$/);
-    return m ? m[0] : '';
-  } catch (e) {
-    return '';
-  }
+function dayKey(t) {
+  const d = new Date(t);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
-function timeFloor(days) {
-  const now = new Date();
-  if (days === 1) {
-    now.setHours(0, 0, 0, 0);
-    return now.getTime();
-  }
-  return Date.now() - days * 86400000;
+function sameLocalDay(t, ref) {
+  return dayKey(t) === dayKey(ref);
+}
+
+function fmtDay(t) {
+  try {
+    const d = new Date(t);
+    const today = dayKey(Date.now()) === dayKey(t);
+    return (today ? 'Hôm nay · ' : '') + d.toLocaleDateString('vi-VN');
+  } catch (e) { return ''; }
+}
+
+function fmtClock(t) {
+  try { return new Date(t).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; }
+}
+
+function matchQ(m, q) {
+  return (
+    (m.name || '').toLowerCase().includes(q) ||
+    (m.url || '').toLowerCase().includes(q) ||
+    (m.code || '').toLowerCase().includes(q) ||
+    (m.file || '').toLowerCase().includes(q) ||
+    (m.shop || '').toLowerCase().includes(q)
+  );
 }
 
 function filtered() {
   const q = $('#q').value.trim().toLowerCase();
-  const days = Number($('#days').value) || 0;
-  const from = days ? timeFloor(days) : 0;
-  return all.filter(m => {
-    if (from && (m.savedAt || 0) < from) return false;
-    if (!q) return true;
-    return (
-      (m.name || '').toLowerCase().includes(q) ||
-      (m.url || '').toLowerCase().includes(q) ||
-      (m.code || '').toLowerCase().includes(q) ||
-      (m.shop || '').toLowerCase().includes(q)
-    );
-  });
+  if (q) return all.filter(m => matchQ(m, q));
+  const range = $('#range').value;
+  if (range === 'all') return all.slice();
+  if (range === '7') return all.filter(m => (m.savedAt || 0) >= Date.now() - 7 * 86400000);
+  if (range === '30') return all.filter(m => (m.savedAt || 0) >= Date.now() - 30 * 86400000);
+  if (range === 'day') {
+    const pick = $('#dayPick').value;
+    if (!pick) return all.slice();
+    const [y, mo, d] = pick.split('-').map(Number);
+    const t = new Date(y, mo - 1, d).getTime();
+    return all.filter(m => sameLocalDay(m.savedAt || 0, t));
+  }
+  return all.filter(m => sameLocalDay(m.savedAt || 0, Date.now()));
 }
 
 function showError(msg) {
@@ -70,74 +74,87 @@ function showError(msg) {
   box.classList.remove('hidden');
 }
 
+function buildItem(m) {
+  const item = document.createElement('div');
+  item.className = 'item';
+  item.title = 'Bấm để mở lại & in: ' + (m.name || 'don-hang.pdf');
+  item.onclick = () => openRecord(m.id);
+
+  const info = document.createElement('div');
+  info.className = 'info';
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = m.name || 'don-hang.pdf';
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const bits = [
+    { cls: 'time', text: fmtClock(m.savedAt) },
+    { cls: 'shop', text: m.shop || '' },
+    { cls: 'file', text: (m.file && m.file !== m.name) ? ('file: ' + m.file) : '' },
+    { cls: 'size', text: fmtSize(m.size) }
+  ].filter(b => b.text);
+  for (const b of bits) {
+    const span = document.createElement('span');
+    span.className = b.cls;
+    span.textContent = b.text;
+    meta.append(span);
+  }
+  info.append(name, meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const btnOpen = document.createElement('button');
+  btnOpen.className = 'mini';
+  btnOpen.textContent = 'Xem & In';
+  btnOpen.onclick = e => { e.stopPropagation(); openRecord(m.id); };
+
+  const btnDl = document.createElement('button');
+  btnDl.className = 'mini';
+  btnDl.textContent = 'Tải PDF';
+  btnDl.onclick = e => { e.stopPropagation(); downloadItem(m, btnDl); };
+
+  const btnDel = document.createElement('button');
+  btnDel.className = 'mini danger';
+  btnDel.textContent = 'Xoá';
+  btnDel.onclick = async e => {
+    e.stopPropagation();
+    if (!confirm('Xoá đơn "' + (m.name || 'don-hang.pdf') + '" khỏi lịch sử?')) return;
+    try { await PWArchive.remove(m.id); } catch (err) { }
+    all = all.filter(x => x.id !== m.id);
+    render();
+    updateStats();
+  };
+
+  actions.append(btnOpen, btnDl, btnDel);
+  item.append(info, actions);
+  return item;
+}
+
 function render() {
   const list = filtered();
   const box = $('#list');
   box.textContent = '';
   $('#empty').classList.toggle('hidden', all.length > 0);
 
+  let lastKey = '';
   for (const m of list) {
-    const item = document.createElement('div');
-    item.className = 'item';
-    item.title = 'Bấm để mở lại & in: ' + (m.name || 'don-hang.pdf');
-    item.onclick = () => openRecord(m.id);
-
-    const info = document.createElement('div');
-    info.className = 'info';
-    const name = document.createElement('div');
-    name.className = 'name';
-    name.textContent = m.name || 'don-hang.pdf';
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const bits = [
-      { cls: 'time', text: fmtTime(m.savedAt) },
-      { cls: 'shop', text: m.shop || '' },
-      { cls: 'code', text: m.code || extractCode(m.url) },
-      { cls: 'file', text: (m.file && m.file !== m.name) ? ('file: ' + m.file) : '' },
-      { cls: 'size', text: fmtSize(m.size) }
-    ].filter(b => b.text);
-    for (const b of bits) {
-      const span = document.createElement('span');
-      span.className = b.cls;
-      span.textContent = b.text;
-      meta.append(span);
+    const key = dayKey(m.savedAt || 0);
+    if (key !== lastKey) {
+      lastKey = key;
+      const count = list.filter(x => dayKey(x.savedAt || 0) === key).length;
+      const head = document.createElement('div');
+      head.className = 'day-head';
+      head.textContent = fmtDay(m.savedAt) + ' — ' + count + ' file';
+      box.append(head);
     }
-    info.append(name, meta);
-
-    const actions = document.createElement('div');
-    actions.className = 'actions';
-
-    const btnOpen = document.createElement('button');
-    btnOpen.className = 'mini';
-    btnOpen.textContent = 'Xem & In';
-    btnOpen.onclick = e => { e.stopPropagation(); openRecord(m.id); };
-
-    const btnDl = document.createElement('button');
-    btnDl.className = 'mini';
-    btnDl.textContent = 'Tải PDF';
-    btnDl.onclick = e => { e.stopPropagation(); downloadItem(m, btnDl); };
-
-    const btnDel = document.createElement('button');
-    btnDel.className = 'mini danger';
-    btnDel.textContent = 'Xoá';
-    btnDel.onclick = async e => {
-      e.stopPropagation();
-      if (!confirm('Xoá đơn "' + (m.name || 'don-hang.pdf') + '" khỏi lịch sử?')) return;
-      try { await PWArchive.remove(m.id); } catch (err) { }
-      all = all.filter(x => x.id !== m.id);
-      render();
-      updateStats();
-    };
-
-    actions.append(btnOpen, btnDl, btnDel);
-    item.append(info, actions);
-    box.append(item);
+    box.append(buildItem(m));
   }
 
   if (all.length > 0 && list.length === 0) {
     const p = document.createElement('p');
     p.style.cssText = 'text-align:center;color:#5f6368;font-size:13.5px';
-    p.textContent = 'Không có đơn nào khớp bộ lọc.';
+    p.textContent = 'Không có file nào khớp bộ lọc.';
     box.append(p);
   }
 }
@@ -174,7 +191,10 @@ async function downloadItem(m, btn) {
 
 async function updateStats() {
   const total = all.reduce((s, m) => s + (m.size || 0), 0);
-  const parts = [all.length + ' đơn đã lưu'];
+  const todayCount = all.filter(m => sameLocalDay(m.savedAt || 0, Date.now())).length;
+  const parts = [
+    all.length + ' đơn đã lưu' + (todayCount ? (' · hôm nay ' + todayCount) : '')
+  ];
   if (total) parts.push('dùng ' + fmtSize(total));
   try {
     const cfg = await chrome.storage.sync.get({ archiveDays: 30 });
@@ -209,22 +229,6 @@ function toastMsg(msg) {
   toastTimer = setTimeout(() => t.classList.add('hidden'), 3500);
 }
 
-function wire() {
-  $('#q').addEventListener('input', render);
-  $('#days').addEventListener('change', render);
-  $('#refresh').onclick = load;
-  $('#addPdf').onclick = () => { $('#pdfInput').value = ''; $('#pdfInput').click(); };
-  $('#pdfInput').addEventListener('change', importPdf);
-  $('#clearAll').onclick = async () => {
-    if (!all.length) return;
-    if (!confirm('Xoá TOÀN BỘ ' + all.length + ' đơn đã lưu? Không thể hoàn tác.')) return;
-    try { await PWArchive.clear(); } catch (e) { }
-    all = [];
-    render();
-    updateStats();
-  };
-}
-
 async function importPdf(e) {
   const f = e.target.files && e.target.files[0];
   if (!f) return;
@@ -247,6 +251,32 @@ async function importPdf(e) {
   } catch (err) {
     showError('Không thêm được PDF: ' + (err && err.message || err));
   }
+}
+
+function wire() {
+  $('#q').addEventListener('input', render);
+  const range = $('#range');
+  range.addEventListener('change', () => {
+    const isDay = range.value === 'day';
+    $('#dayPick').classList.toggle('hidden', !isDay);
+    if (isDay && !$('#dayPick').value) {
+      const d = new Date();
+      $('#dayPick').value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    render();
+  });
+  $('#dayPick').addEventListener('change', render);
+  $('#refresh').onclick = load;
+  $('#addPdf').onclick = () => { $('#pdfInput').value = ''; $('#pdfInput').click(); };
+  $('#pdfInput').addEventListener('change', importPdf);
+  $('#clearAll').onclick = async () => {
+    if (!all.length) return;
+    if (!confirm('Xoá TOÀN BỘ ' + all.length + ' đơn đã lưu? Không thể hoàn tác.')) return;
+    try { await PWArchive.clear(); } catch (e) { }
+    all = [];
+    render();
+    updateStats();
+  };
 }
 
 wire();

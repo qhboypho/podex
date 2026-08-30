@@ -11,13 +11,15 @@
     <div class="sub" id="stats">Đang tải...</div>
   </header>
   <div class="controls">
-    <input id="q" type="search" placeholder="Tìm theo tên file, mã đơn trong link, sàn (shopee, tiktok...)">
-    <select id="days" title="Khoảng thời gian">
-      <option value="0">Mọi thời gian</option>
-      <option value="1">Hôm nay</option>
+    <input id="q" type="search" placeholder="Tìm theo mã vận đơn, tên file, sàn... (tìm trên toàn bộ lịch sử)">
+    <select id="range" title="Khoảng thời gian">
+      <option value="today" selected>Hôm nay</option>
       <option value="7">7 ngày qua</option>
-      <option value="30" selected>30 ngày qua</option>
+      <option value="30">30 ngày qua</option>
+      <option value="all">Tất cả</option>
+      <option value="day">Theo ngày...</option>
     </select>
+    <input id="dayPick" type="date" class="hidden" title="Xem file của một ngày">
     <button id="addPdf" title="Thêm file PDF bất kỳ vào lịch sử">+ Thêm PDF</button>
     <button id="refresh" title="Làm mới danh sách">Làm mới</button>
     <button id="clearAll" class="danger" title="Xoá toàn bộ lịch sử đã lưu">Xoá tất cả</button>
