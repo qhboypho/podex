@@ -11,6 +11,7 @@ let pages = [];
 let zoom = 'fit';
 let editing = false;
 let cfg = { enabled: true, layers: [] };
+let skipArchive = false;
 
 const imgCache = new Map();
 let drag = null;
@@ -103,19 +104,31 @@ function guessNameFromUrl(url) {
 
 async function loadPdfBytes(bytes, name) {
   setBusy('Đang mở PDF...');
+  let ok = false;
   try {
     pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
     docName = name || 'don-hang.pdf';
     await renderAllPages();
+    ok = true;
   } catch (e) {
     showDropzone(true);
     toast('Không mở được file PDF này.');
   }
   setBusy(null);
+  return ok;
 }
 
-async function loadPdfDataUrl(dataUrl, name) {
-  await loadPdfBytes(dataUrlToBytes(dataUrl), name);
+async function loadPdfDataUrl(dataUrl, name, srcUrl) {
+  const ok = await loadPdfBytes(dataUrlToBytes(dataUrl), name);
+  if (!ok || skipArchive || !dataUrl) return;
+  try {
+    chrome.runtime.sendMessage({
+      type: 'PW_ARCHIVE_PDF',
+      data: dataUrl,
+      name: name || docName,
+      url: srcUrl || ''
+    }).catch(() => { });
+  } catch (e) { /* ignore */ }
 }
 
 let lastFailedUrl = '';
@@ -133,7 +146,7 @@ async function loadPdfUrl(url) {
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'PW_FETCH_PDF', url });
     if (resp && resp.ok) {
-      await loadPdfDataUrl(resp.data, guessNameFromUrl(url));
+      await loadPdfDataUrl(resp.data, guessNameFromUrl(url), url);
     } else {
       showLoadError(url, (resp && resp.error) || 'Lỗi không rõ');
     }
@@ -157,11 +170,26 @@ async function initFromParams() {
     try {
       const resp = await chrome.runtime.sendMessage({ type: 'PW_GET_PDF', id });
       if (resp && resp.ok && resp.payload && resp.payload.data) {
-        await loadPdfDataUrl(resp.payload.data, resp.payload.name);
-        chrome.runtime.sendMessage({ type: 'PW_CLEAN_PDF', id }).catch(() => {});
+        await loadPdfDataUrl(resp.payload.data, resp.payload.name, resp.payload.url || '');
+        chrome.runtime.sendMessage({ type: 'PW_CLEAN_PDF', id }).catch(() => { });
         return;
       }
     } catch (e) { /* ignore */ }
+  } else if (src === 'archive') {
+    const id = q.get('id');
+    if (id) {
+      try {
+        const resp = await chrome.runtime.sendMessage({ type: 'PW_ARCHIVE_GET', id });
+        if (resp && resp.ok && resp.record && resp.record.data) {
+          skipArchive = true;
+          await loadPdfBytes(dataUrlToBytes(resp.record.data), resp.record.name);
+          return;
+        }
+        showLoadError('', (resp && resp.error) || 'Không tìm thấy đơn trong lịch sử');
+      } catch (e) {
+        showLoadError('', String(e && e.message || e));
+      }
+    }
   } else if (src === 'url') {
     const id = q.get('id');
     if (id) {

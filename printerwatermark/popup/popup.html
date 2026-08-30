@@ -89,11 +89,20 @@
         <span class="slider"></span>
       </label>
     </div>
+    <div class="toggle-row">
+      <span>Lưu lịch sử PDF đã in</span>
+      <label class="switch">
+        <input type="checkbox" id="archive">
+        <span class="slider"></span>
+      </label>
+    </div>
     <button id="openViewer">Mở trình in &amp; watermark</button>
+    <button id="openHistory">Lịch sử đơn đã in</button>
     <p class="hint">
       <b>Cách dùng:</b> bấm <b>In đơn</b> trên sàn như bình thường — tab PDF sẽ mở
       bằng trình của extension. Bấm nút <b>Watermark</b> để thêm chữ/logo,
       kéo thả vị trí, chỉnh size + độ mờ rồi <b>In đơn</b> hoặc <b>Tải PDF</b>.
+      Mọi đơn in qua extension được lưu lại <b>30 ngày</b> để in lại khi khiếu nại.
     </p>
   </div>
   <script src="popup.js"></script>

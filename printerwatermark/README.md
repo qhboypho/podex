@@ -9,6 +9,8 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 - Chế độ **lặp kín trang** (kiểu đóng dấu chống bán trùng sàn)
 - **In đơn** trực tiếp (Ctrl+P cũng được) hoặc **Tải PDF** đã đóng dấu
 - Cấu hình watermark **tự động lưu**, dùng lại cho mọi lần in sau
+- **Tự lưu lịch sử đơn đã in 30 ngày** — sàn chỉ giữ phiếu 14 ngày, còn extension
+  giữ bản PDF trên máy để tìm & in lại khi khiếu nại; hết hạn tự xoá
 
 ## Cách cài đặt (Load unpacked)
 
@@ -43,6 +45,19 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 > Nút bật/tắt trong popup của extension: tắt công tắc **Tự động chặn PDF in đơn**
 > nếu muốn PDF mở bằng trình duyệt như cũ (lúc đó dùng Cách 2 để đóng dấu).
 
+## Lịch sử đơn đã in (in lại khi khiếu nại)
+
+- Mỗi lần PDF in đơn mở qua extension (TikTok, Shopee, Lazada...) là bản PDF được
+  **tự lưu vào IndexedDB** của extension ngay trên máy — không gửi lên đâu cả.
+- Vào popup → **Lịch sử đơn đã in** để tìm lại: ô tìm kiếm khớp tên file, mã đơn
+  trong link gốc và tên sàn; lọc theo thời gian.
+- Bấm **Xem & In** để mở lại đúng phiếu bằng trình watermark và in như thường;
+  **Tải PDF** để lấy file gốc.
+- Mặc định giữ **30 ngày** rồi tự xoá (dọn mỗi 12 giờ + mỗi khi trình duyệt khởi động
+  service worker). Tắt bằng công tắc **Lưu lịch sử PDF đã in** trong popup.
+- Giới hạn tổng dung lượng ~500MB: quá giới hạn thì đơn cũ nhất bị xoá trước (FIFO).
+- In cùng một link trong 2 phút không lưu trùng bản (dedupe theo URL).
+
 ## Kiến trúc
 
 ```
@@ -62,11 +77,22 @@ printerwatermark/
 │                          # PDF blob (kiểu trang awbprint của Shopee) -> chuyển
 │                          # tab sang viewer
 ├── viewer/
-│   ├── viewer.html/css/js # Trình xem PDF + editor watermark + in/tải
-├── popup/                 # Bật/tắt chặn PDF, đóng dấu tab hiện tại, mở viewer
+│   ├── viewer.html/css/js # Trình xem PDF + editor watermark + in/tải;
+│                          # sau khi load PDF thành công -> gửi PW_ARCHIVE_PDF
+│                          # để background lưu vào lịch sử
+├── history/               # Trang "Lịch sử đơn đã in": tìm kiếm, xem & in lại,
+│                          # tải PDF, xoá từng đơn / xoá tất cả
+├── popup/                 # Bật/tắt chặn PDF, bật/tắt lưu lịch sử, đóng dấu tab
+│                          # hiện tại, mở viewer, mở trang lịch sử
 ├── pdfjs/                 # pdf.js (render) + pdf-lib (đóng gói PDF tải về) - bundle local
 └── icons/
 ```
+
+**Lịch sử đơn (IndexedDB `pw_archive`):** 2 store — `meta` (id, savedAt, expiresAt,
+name, url, shop, size; index theo savedAt/url) và `data` (data-URL của PDF).
+Dọn dẹp bằng `chrome.alarms` mỗi 12 giờ + khi service worker dậy; quá 500MB xoá
+FIFO. Viewer mở từ lịch sử dùng `viewer.html?src=archive&id=...` và không lưu lại
+bản thứ hai.
 
 **Luồng hoạt động (link như TikTok):** bấm In trên sàn → tab mới điều hướng tới URL
 PDF → `webRequest.onHeadersReceived` thấy response PDF (Content-Type `application/pdf`

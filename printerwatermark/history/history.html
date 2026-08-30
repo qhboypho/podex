@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Lịch sử đơn đã in</title>
+  <link rel="stylesheet" href="history.css">
+</head>
+<body>
+  <header>
+    <h1>Lịch sử đơn đã in</h1>
+    <div class="sub" id="stats">Đang tải...</div>
+  </header>
+  <div class="controls">
+    <input id="q" type="search" placeholder="Tìm theo tên file, mã đơn trong link, sàn (shopee, tiktok...)">
+    <select id="days" title="Khoảng thời gian">
+      <option value="0">Mọi thời gian</option>
+      <option value="1">Hôm nay</option>
+      <option value="7">7 ngày qua</option>
+      <option value="30" selected>30 ngày qua</option>
+    </select>
+    <button id="refresh" title="Làm mới danh sách">Làm mới</button>
+    <button id="clearAll" class="danger" title="Xoá toàn bộ lịch sử đã lưu">Xoá tất cả</button>
+  </div>
+  <main id="list"></main>
+  <div id="empty" class="hidden">
+    <p><b>Chưa có đơn nào được lưu.</b></p>
+    <p>Bấm <b>In đơn</b> trên sàn như bình thường — extension sẽ tự lưu bản PDF lại đây
+    (mặc định giữ 30 ngày rồi tự xoá).</p>
+  </div>
+  <script src="history.js"></script>
+</body>
+</html>

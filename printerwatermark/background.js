@@ -38,6 +38,182 @@ async function dropPending(id) {
   }
 }
 
+// ---------- lịch sử đơn đã in (IndexedDB, mặc định giữ 30 ngày) ----------
+const ARCHIVE_DB = 'pw_archive';
+const ARCHIVE_META = 'meta';
+const ARCHIVE_DATA = 'data';
+const ARCHIVE_MAX_BYTES = 500 * 1024 * 1024;
+const ARCHIVE_URL_DEDUPE_MS = 2 * 60 * 1000;
+let archiveDbP = null;
+
+function openArchiveDb() {
+  if (archiveDbP) return archiveDbP;
+  archiveDbP = new Promise((resolve, reject) => {
+    const req = indexedDB.open(ARCHIVE_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(ARCHIVE_META)) {
+        const st = db.createObjectStore(ARCHIVE_META, { keyPath: 'id' });
+        st.createIndex('savedAt', 'savedAt');
+        st.createIndex('url', 'url');
+      }
+      if (!db.objectStoreNames.contains(ARCHIVE_DATA)) {
+        db.createObjectStore(ARCHIVE_DATA, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  archiveDbP.catch(() => { archiveDbP = null; });
+  return archiveDbP;
+}
+
+function idbDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('IDB aborted'));
+  });
+}
+
+async function archiveConfig() {
+  try {
+    const cfg = await chrome.storage.sync.get({ archiveEnabled: true, archiveDays: 30 });
+    return {
+      enabled: cfg.archiveEnabled !== false,
+      days: Math.max(1, Math.min(365, Number(cfg.archiveDays) || 30))
+    };
+  } catch (e) {
+    return { enabled: true, days: 30 };
+  }
+}
+
+function shopFromUrl(u) {
+  try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+}
+
+async function archiveSave(data, name, url) {
+  if (!data || typeof data !== 'string' || data.indexOf('data:application/pdf') !== 0) {
+    return { ok: false, error: 'Du lieu PDF khong hop le' };
+  }
+  const cfg = await archiveConfig();
+  if (!cfg.enabled) return { ok: false, error: 'disabled' };
+  if (url) {
+    try {
+      const db = await openArchiveDb();
+      const dup = await new Promise((resolve) => {
+        const tx = db.transaction(ARCHIVE_META, 'readonly');
+        const rq = tx.objectStore(ARCHIVE_META).index('url').get(url);
+        rq.onsuccess = () => resolve(rq.result || null);
+        rq.onerror = () => resolve(null);
+      });
+      if (dup && Date.now() - (dup.savedAt || 0) < ARCHIVE_URL_DEDUPE_MS) {
+        return { ok: true, id: dup.id, dup: true };
+      }
+    } catch (e) { /* bỏ qua lỗi dedupe */ }
+  }
+  const id = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const now = Date.now();
+  const b64 = data.slice(data.indexOf(',') + 1);
+  const meta = {
+    id,
+    savedAt: now,
+    expiresAt: now + cfg.days * 86400000,
+    name: name || 'don-hang.pdf',
+    url: url || '',
+    shop: shopFromUrl(url || ''),
+    size: Math.floor(b64.length * 3 / 4)
+  };
+  try {
+    const db = await openArchiveDb();
+    const tx = db.transaction([ARCHIVE_META, ARCHIVE_DATA], 'readwrite');
+    tx.objectStore(ARCHIVE_META).put(meta);
+    tx.objectStore(ARCHIVE_DATA).put({ id, data });
+    await idbDone(tx);
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+  return { ok: true, id };
+}
+
+async function archiveList() {
+  const db = await openArchiveDb();
+  const metas = await new Promise((resolve, reject) => {
+    const tx = db.transaction(ARCHIVE_META, 'readonly');
+    const rq = tx.objectStore(ARCHIVE_META).getAll();
+    rq.onsuccess = () => resolve(rq.result || []);
+    rq.onerror = () => reject(rq.error);
+  });
+  metas.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  return metas;
+}
+
+async function archiveGetFull(id) {
+  const db = await openArchiveDb();
+  return new Promise((resolve) => {
+    const tx = db.transaction([ARCHIVE_META, ARCHIVE_DATA], 'readonly');
+    const r1 = tx.objectStore(ARCHIVE_META).get(id);
+    const r2 = tx.objectStore(ARCHIVE_DATA).get(id);
+    tx.oncomplete = () => {
+      resolve(r1.result && r2.result && r2.result.data
+        ? Object.assign(r1.result, { data: r2.result.data })
+        : null);
+    };
+    tx.onerror = () => resolve(null);
+    tx.onabort = () => resolve(null);
+  });
+}
+
+async function archiveDelete(id) {
+  const db = await openArchiveDb();
+  const tx = db.transaction([ARCHIVE_META, ARCHIVE_DATA], 'readwrite');
+  tx.objectStore(ARCHIVE_META).delete(id);
+  tx.objectStore(ARCHIVE_DATA).delete(id);
+  await idbDone(tx);
+}
+
+async function archiveClear() {
+  const db = await openArchiveDb();
+  const tx = db.transaction([ARCHIVE_META, ARCHIVE_DATA], 'readwrite');
+  tx.objectStore(ARCHIVE_META).clear();
+  tx.objectStore(ARCHIVE_DATA).clear();
+  await idbDone(tx);
+}
+
+async function archiveSweep() {
+  try {
+    const cfg = await archiveConfig();
+    const cutoff = Date.now() - cfg.days * 86400000;
+    const metas = await archiveList();
+    const dead = metas.filter(m => (m.savedAt || 0) < cutoff);
+    for (const m of dead) {
+      try { await archiveDelete(m.id); } catch (e) { }
+    }
+    const alive = metas.filter(m => (m.savedAt || 0) >= cutoff);
+    let total = alive.reduce((s, m) => s + (m.size || 0), 0);
+    for (let i = alive.length - 1; i >= 0 && total > ARCHIVE_MAX_BYTES; i--) {
+      try {
+        await archiveDelete(alive[i].id);
+        total -= (alive[i].size || 0);
+      } catch (e) { }
+    }
+    return { ok: true, removed: dead.length };
+  } catch (e) {
+    return { ok: false, removed: 0 };
+  }
+}
+
+async function ensureArchiveAlarm() {
+  try {
+    const a = await chrome.alarms.get('pwArchiveSweep');
+    if (!a) await chrome.alarms.create('pwArchiveSweep', { periodInMinutes: 720 });
+  } catch (e) { }
+}
+
+chrome.alarms.onAlarm.addListener((al) => {
+  if (al && al.name === 'pwArchiveSweep') archiveSweep();
+});
+
 function viewerUrl(params) {
   const u = new URL(chrome.runtime.getURL('viewer/viewer.html'));
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
@@ -197,7 +373,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         const check = await fetchPdfBinary(details.url);
         if (!check.ok) return;
         const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        await putPending(id, { data: check.data, name: pdfNameFromUrl(details.url) });
+        await putPending(id, { data: check.data, name: pdfNameFromUrl(details.url), url: details.url });
         setTimeout(() => dropPending(id), 10 * 60 * 1000);
         try {
           await chrome.tabs.update(details.tabId, { url: viewerUrl({ src: 'data', id }) });
@@ -253,6 +429,8 @@ const retryStamp = new Map();
       }
     }
     if (dirty) await chrome.storage.session.set({ pwPdfTabs: m });
+    await archiveSweep();
+    await ensureArchiveAlarm();
   } catch (e) {
   }
 })();
@@ -318,7 +496,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === 'PW_OPEN_PDF' || msg.type === 'PW_OPEN_PDF_IN_TAB') {
         const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        await putPending(id, { data: msg.data, name: msg.name || 'don-hang.pdf' });
+        const srcUrl = (sender && sender.tab && sender.tab.url) || '';
+        await putPending(id, { data: msg.data, name: msg.name || 'don-hang.pdf', url: srcUrl });
         setTimeout(() => dropPending(id), 10 * 60 * 1000);
         const tabId = sender && sender.tab && typeof sender.tab.id === 'number' && sender.tab.id >= 0
           ? sender.tab.id
@@ -365,6 +544,55 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === 'PW_CLEAN_PDF') {
         await dropPending(msg.id);
         sendResponse({ ok: true });
+        return;
+      }
+
+      if (msg.type === 'PW_ARCHIVE_PDF') {
+        sendResponse(await archiveSave(msg.data, msg.name, msg.url || ''));
+        return;
+      }
+
+      if (msg.type === 'PW_ARCHIVE_LIST') {
+        try {
+          sendResponse({ ok: true, list: await archiveList() });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e), list: [] });
+        }
+        return;
+      }
+
+      if (msg.type === 'PW_ARCHIVE_GET') {
+        try {
+          const rec = await archiveGetFull(msg.id);
+          sendResponse(rec ? { ok: true, record: rec } : { ok: false, error: 'Khong tim thay don trong lich su' });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+        return;
+      }
+
+      if (msg.type === 'PW_ARCHIVE_DELETE') {
+        try {
+          await archiveDelete(msg.id);
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+        return;
+      }
+
+      if (msg.type === 'PW_ARCHIVE_CLEAR') {
+        try {
+          await archiveClear();
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+        return;
+      }
+
+      if (msg.type === 'PW_ARCHIVE_SWEEP') {
+        sendResponse(await archiveSweep());
         return;
       }
 

@@ -17,6 +17,19 @@ document.getElementById('openViewer').addEventListener('click', () => {
   window.close();
 });
 
+document.getElementById('openHistory').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('history/history.html') });
+  window.close();
+});
+
+const archiveCheckbox = document.getElementById('archive');
+chrome.storage.sync.get({ archiveEnabled: true })
+  .then(cfg => { archiveCheckbox.checked = cfg.archiveEnabled !== false; })
+  .catch(() => { archiveCheckbox.checked = true; });
+archiveCheckbox.addEventListener('change', () => {
+  chrome.storage.sync.set({ archiveEnabled: archiveCheckbox.checked });
+});
+
 (async () => {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
