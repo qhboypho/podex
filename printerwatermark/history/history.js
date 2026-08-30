@@ -53,9 +53,21 @@ function filtered() {
     return (
       (m.name || '').toLowerCase().includes(q) ||
       (m.url || '').toLowerCase().includes(q) ||
+      (m.code || '').toLowerCase().includes(q) ||
       (m.shop || '').toLowerCase().includes(q)
     );
   });
+}
+
+function showError(msg) {
+  const box = $('#pageError');
+  if (!msg) {
+    box.classList.add('hidden');
+    box.textContent = '';
+    return;
+  }
+  box.textContent = msg;
+  box.classList.remove('hidden');
 }
 
 function render() {
@@ -79,7 +91,7 @@ function render() {
     const bits = [
       { cls: 'time', text: fmtTime(m.savedAt) },
       { cls: 'shop', text: m.shop || '' },
-      { cls: 'code', text: extractCode(m.url) },
+      { cls: 'code', text: m.code || extractCode(m.url) },
       { cls: 'size', text: fmtSize(m.size) }
     ].filter(b => b.text);
     for (const b of bits) {
@@ -112,7 +124,7 @@ function render() {
     btnDel.textContent = 'Xoá';
     btnDel.onclick = async () => {
       if (!confirm('Xoá đơn "' + (m.name || 'don-hang.pdf') + '" khỏi lịch sử?')) return;
-      try { await chrome.runtime.sendMessage({ type: 'PW_ARCHIVE_DELETE', id: m.id }); } catch (e) { }
+      try { await PWArchive.remove(m.id); } catch (e) { }
       all = all.filter(x => x.id !== m.id);
       render();
       updateStats();
@@ -135,11 +147,9 @@ async function downloadItem(m, btn) {
   btn.disabled = true;
   btn.textContent = '...';
   try {
-    const resp = await chrome.runtime.sendMessage({ type: 'PW_ARCHIVE_GET', id: m.id });
-    if (!resp || !resp.ok || !resp.record || !resp.record.data) {
-      throw new Error((resp && resp.error) || 'Không đọc được file');
-    }
-    const blob = await (await fetch(resp.record.data)).blob();
+    const rec = await PWArchive.getFull(m.id);
+    if (!rec || !rec.data) throw new Error('Không đọc được file từ lịch sử');
+    const blob = await (await fetch(rec.data)).blob();
     const url = URL.createObjectURL(blob);
     const dl = await chrome.downloads.download({ url, filename: safePdfName(m.name), saveAs: false });
     if (dl) {
@@ -174,10 +184,17 @@ async function updateStats() {
 
 async function load() {
   $('#stats').textContent = 'Đang tải...';
-  let resp = null;
-  try { resp = await chrome.runtime.sendMessage({ type: 'PW_ARCHIVE_LIST' }); } catch (e) { }
-  all = (resp && resp.list) || [];
-  render();
+  showError('');
+  try {
+    await PWArchive.maybeSweep();
+    all = await PWArchive.list();
+    render();
+  } catch (e) {
+    all = [];
+    render();
+    showError('Không đọc được lịch sử: ' + (e && e.message || e) +
+      '. Thử bấm Làm mới; nếu vẫn lỗi, vào chrome://extensions bấm Reload (⟳) trên extension.');
+  }
   updateStats();
 }
 
@@ -188,7 +205,7 @@ function wire() {
   $('#clearAll').onclick = async () => {
     if (!all.length) return;
     if (!confirm('Xoá TOÀN BỘ ' + all.length + ' đơn đã lưu? Không thể hoàn tác.')) return;
-    try { await chrome.runtime.sendMessage({ type: 'PW_ARCHIVE_CLEAR' }); } catch (e) { }
+    try { await PWArchive.clear(); } catch (e) { }
     all = [];
     render();
     updateStats();

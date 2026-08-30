@@ -143,4 +143,16 @@ button.mini { padding: 6px 10px; font-size: 12px; border-radius: 7px; }
 
 #empty p { margin: 4px 0; }
 
+#pageError {
+  max-width: 980px;
+  margin: 16px auto 0;
+  padding: 12px 16px;
+  border: 1px solid #f3c1bd;
+  background: #fce8e6;
+  color: #a50e0e;
+  border-radius: 10px;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
 .hidden { display: none !important; }

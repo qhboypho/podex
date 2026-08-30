@@ -1,0 +1,176 @@
+'use strict';
+
+// Lưu trữ lịch sử đơn đã in — chạy trong trang extension (viewer/history),
+// KHÔNG chạy trong service worker để tránh treo IndexedDB khi SW ngủ.
+const PWArchive = (() => {
+  const DB = 'pw_archive';
+  const META = 'meta';
+  const DATA = 'data';
+  const MAX_BYTES = 500 * 1024 * 1024;
+  const DEDUPE_MS = 2 * 60 * 1000;
+  const SWEEP_KEY = 'pwLastSweep';
+  const SWEEP_MIN_MS = 60 * 60 * 1000;
+  let dbP = null;
+
+  function open() {
+    if (dbP) return dbP;
+    dbP = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(META)) {
+          const st = db.createObjectStore(META, { keyPath: 'id' });
+          st.createIndex('savedAt', 'savedAt');
+          st.createIndex('url', 'url');
+        }
+        if (!db.objectStoreNames.contains(DATA)) {
+          db.createObjectStore(DATA, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Khong mo duoc IndexedDB'));
+      req.onblocked = () => reject(new Error('IndexedDB dang bi block boi tab khac'));
+    });
+    dbP.catch(() => { dbP = null; });
+    return dbP;
+  }
+
+  function done(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB loi'));
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB abort'));
+    });
+  }
+
+  async function config() {
+    try {
+      const c = await chrome.storage.sync.get({ archiveEnabled: true, archiveDays: 30 });
+      return {
+        enabled: c.archiveEnabled !== false,
+        days: Math.max(1, Math.min(365, Number(c.archiveDays) || 30))
+      };
+    } catch (e) {
+      return { enabled: true, days: 30 };
+    }
+  }
+
+  function shopFromUrl(u) {
+    try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+  }
+
+  async function save(data, name, url, code) {
+    if (!data || typeof data !== 'string' || data.indexOf('data:application/pdf') !== 0) {
+      return { ok: false, error: 'Du lieu PDF khong hop le' };
+    }
+    const cfg = await config();
+    if (!cfg.enabled) return { ok: false, error: 'disabled' };
+    url = url || '';
+    if (url) {
+      try {
+        const db = await open();
+        const dup = await new Promise((resolve) => {
+          const tx = db.transaction(META, 'readonly');
+          const rq = tx.objectStore(META).index('url').get(url);
+          rq.onsuccess = () => resolve(rq.result || null);
+          rq.onerror = () => resolve(null);
+        });
+        if (dup && Date.now() - (dup.savedAt || 0) < DEDUPE_MS) {
+          return { ok: true, id: dup.id, dup: true };
+        }
+      } catch (e) { /* bỏ qua lỗi dedupe */ }
+    }
+    const id = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const now = Date.now();
+    const b64 = data.slice(data.indexOf(',') + 1);
+    const meta = {
+      id,
+      savedAt: now,
+      expiresAt: now + cfg.days * 86400000,
+      name: name || 'don-hang.pdf',
+      url,
+      code: code || '',
+      shop: shopFromUrl(url),
+      size: Math.floor(b64.length * 3 / 4)
+    };
+    const db = await open();
+    const tx = db.transaction([META, DATA], 'readwrite');
+    tx.objectStore(META).put(meta);
+    tx.objectStore(DATA).put({ id, data });
+    await done(tx);
+    maybeSweep();
+    return { ok: true, id };
+  }
+
+  async function list() {
+    const db = await open();
+    const metas = await new Promise((resolve, reject) => {
+      const tx = db.transaction(META, 'readonly');
+      const rq = tx.objectStore(META).getAll();
+      rq.onsuccess = () => resolve(rq.result || []);
+      rq.onerror = () => reject(rq.error);
+    });
+    metas.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    return metas;
+  }
+
+  async function getFull(id) {
+    const db = await open();
+    return new Promise((resolve) => {
+      const tx = db.transaction([META, DATA], 'readonly');
+      const r1 = tx.objectStore(META).get(id);
+      const r2 = tx.objectStore(DATA).get(id);
+      tx.oncomplete = () => {
+        resolve(r1.result && r2.result ? Object.assign(r1.result, { data: r2.result.data }) : null);
+      };
+      tx.onerror = () => resolve(null);
+      tx.onabort = () => resolve(null);
+    });
+  }
+
+  async function remove(id) {
+    const db = await open();
+    const tx = db.transaction([META, DATA], 'readwrite');
+    tx.objectStore(META).delete(id);
+    tx.objectStore(DATA).delete(id);
+    await done(tx);
+  }
+
+  async function clear() {
+    const db = await open();
+    const tx = db.transaction([META, DATA], 'readwrite');
+    tx.objectStore(META).clear();
+    tx.objectStore(DATA).clear();
+    await done(tx);
+  }
+
+  async function sweep() {
+    const cfg = await config();
+    const cutoff = Date.now() - cfg.days * 86400000;
+    const metas = await list();
+    const dead = metas.filter(m => (m.savedAt || 0) < cutoff);
+    for (const m of dead) {
+      try { await remove(m.id); } catch (e) { }
+    }
+    const alive = metas.filter(m => (m.savedAt || 0) >= cutoff);
+    let total = alive.reduce((s, m) => s + (m.size || 0), 0);
+    for (let i = alive.length - 1; i >= 0 && total > MAX_BYTES; i--) {
+      try {
+        await remove(alive[i].id);
+        total -= (alive[i].size || 0);
+      } catch (e) { }
+    }
+    return { removed: dead.length };
+  }
+
+  async function maybeSweep() {
+    try {
+      const o = await chrome.storage.local.get({ [SWEEP_KEY]: 0 });
+      if (Date.now() - (o[SWEEP_KEY] || 0) < SWEEP_MIN_MS) return;
+      await chrome.storage.local.set({ [SWEEP_KEY]: Date.now() });
+      await sweep();
+    } catch (e) { /* ignore */ }
+  }
+
+  return { save, list, getFull, remove, clear, sweep, maybeSweep };
+})();

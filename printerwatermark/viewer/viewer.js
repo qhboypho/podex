@@ -118,16 +118,41 @@ async function loadPdfBytes(bytes, name) {
   return ok;
 }
 
+async function extractOrderCode() {
+  try {
+    let text = '';
+    const max = Math.min(2, pdfDoc.numPages || 1);
+    for (let i = 1; i <= max; i++) {
+      const page = await pdfDoc.getPage(i);
+      const tc = await page.getTextContent();
+      text += tc.items.map(it => it.str || '').join(' ') + '\n';
+    }
+    const patterns = [
+      /order[\s_-]*id[:\s#]*([0-9]{8,25})/i,
+      /\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/i,
+      /\b([0-9]{12,22})\b/
+    ];
+    for (const re of patterns) {
+      const m = text.match(re);
+      if (m) return m[1];
+    }
+    return '';
+  } catch (e) {
+    return '';
+  }
+}
+
 async function loadPdfDataUrl(dataUrl, name, srcUrl) {
   const ok = await loadPdfBytes(dataUrlToBytes(dataUrl), name);
   if (!ok || skipArchive || !dataUrl) return;
   try {
-    chrome.runtime.sendMessage({
-      type: 'PW_ARCHIVE_PDF',
-      data: dataUrl,
-      name: name || docName,
-      url: srcUrl || ''
-    }).catch(() => { });
+    const code = await extractOrderCode();
+    const archiveName = code ? ('Đơn ' + code + '.pdf') : (name || docName);
+    PWArchive.save(dataUrl, archiveName, srcUrl || '', code)
+      .then(r => {
+        if (r && r.ok && !r.dup) toast('Đã lưu vào lịch sử đơn đã in.');
+      })
+      .catch(() => { });
   } catch (e) { /* ignore */ }
 }
 
@@ -179,13 +204,13 @@ async function initFromParams() {
     const id = q.get('id');
     if (id) {
       try {
-        const resp = await chrome.runtime.sendMessage({ type: 'PW_ARCHIVE_GET', id });
-        if (resp && resp.ok && resp.record && resp.record.data) {
+        const rec = await PWArchive.getFull(id);
+        if (rec && rec.data) {
           skipArchive = true;
-          await loadPdfBytes(dataUrlToBytes(resp.record.data), resp.record.name);
+          await loadPdfBytes(dataUrlToBytes(rec.data), rec.name);
           return;
         }
-        showLoadError('', (resp && resp.error) || 'Không tìm thấy đơn trong lịch sử');
+        showLoadError('', 'Không tìm thấy đơn trong lịch sử (có thể đã bị xoá)');
       } catch (e) {
         showLoadError('', String(e && e.message || e));
       }

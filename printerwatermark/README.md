@@ -48,13 +48,15 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 ## Lịch sử đơn đã in (in lại khi khiếu nại)
 
 - Mỗi lần PDF in đơn mở qua extension (TikTok, Shopee, Lazada...) là bản PDF được
-  **tự lưu vào IndexedDB** của extension ngay trên máy — không gửi lên đâu cả.
-- Vào popup → **Lịch sử đơn đã in** để tìm lại: ô tìm kiếm khớp tên file, mã đơn
-  trong link gốc và tên sàn; lọc theo thời gian.
+  **tự lưu vào IndexedDB** ngay trên máy — không gửi lên đâu cả.
+- Extension **tự đọc mã đơn (Order ID / mã vận đơn)** từ nội dung phiếu và đặt tên
+  bản lưu kiểu `Đơn 5880066676216131551.pdf` — chỉ cần gõ mã đơn khiếu nại là tìm ra.
+- Vào popup → **Lịch sử đơn đã in** để tìm lại: ô tìm kiếm khớp mã đơn, tên file,
+  link gốc và tên sàn; lọc theo thời gian.
 - Bấm **Xem & In** để mở lại đúng phiếu bằng trình watermark và in như thường;
   **Tải PDF** để lấy file gốc.
-- Mặc định giữ **30 ngày** rồi tự xoá (dọn mỗi 12 giờ + mỗi khi trình duyệt khởi động
-  service worker). Tắt bằng công tắc **Lưu lịch sử PDF đã in** trong popup.
+- Mặc định giữ **30 ngày** rồi tự xoá (quét khi mở viewer/trang lịch sử, tối đa
+  1 lần/giờ). Tắt bằng công tắc **Lưu lịch sử PDF đã in** trong popup.
 - Giới hạn tổng dung lượng ~500MB: quá giới hạn thì đơn cũ nhất bị xoá trước (FIFO).
 - In cùng một link trong 2 phút không lưu trùng bản (dedupe theo URL).
 
@@ -71,28 +73,31 @@ printerwatermark/
 │                          #  - nhận PDF (base64) từ content script, mở viewer
 │                          #  - fetch PDF theo URL (có cookie) cho viewer
 │                          #  - phục vụ popup: nhận diện/đóng dấu tab PDF hiện tại
+├── archive.js              # Module IndexedDB 'pw_archive' chạy trong TRANG extension
+│                           # (viewer/history), không chạy trong service worker:
+│                           # save/list/get/remove/clear/sweep + dedupe theo URL
 ├── content.js             # Hook window.open + click <a> trên trang sàn,
 │                          # phát hiện PDF dạng blob:/...pdf -> gửi sang viewer;
 │                          # trên domain sàn: quan sát iframe/embed/object chứa
 │                          # PDF blob (kiểu trang awbprint của Shopee) -> chuyển
 │                          # tab sang viewer
 ├── viewer/
-│   ├── viewer.html/css/js # Trình xem PDF + editor watermark + in/tải;
-│                          # sau khi load PDF thành công -> gửi PW_ARCHIVE_PDF
-│                          # để background lưu vào lịch sử
-├── history/               # Trang "Lịch sử đơn đã in": tìm kiếm, xem & in lại,
-│                          # tải PDF, xoá từng đơn / xoá tất cả
-├── popup/                 # Bật/tắt chặn PDF, bật/tắt lưu lịch sử, đóng dấu tab
-│                          # hiện tại, mở viewer, mở trang lịch sử
-├── pdfjs/                 # pdf.js (render) + pdf-lib (đóng gói PDF tải về) - bundle local
+│   ├── viewer.html/css/js  # Trình xem PDF + editor watermark + in/tải; sau khi
+│                           # load PDF thành công -> đọc mã đơn từ text -> PWArchive.save
+├── history/                # Trang "Lịch sử đơn đã in": tìm kiếm, xem & in lại,
+│                           # tải PDF, xoá từng đơn / xoá tất cả
+├── popup/                  # Bật/tắt chặn PDF, bật/tắt lưu lịch sử, đóng dấu tab
+│                           # hiện tại, mở viewer, mở trang lịch sử
+├── pdfjs/                  # pdf.js (render) + pdf-lib (đóng gói PDF tải về) - bundle local
 └── icons/
 ```
 
 **Lịch sử đơn (IndexedDB `pw_archive`):** 2 store — `meta` (id, savedAt, expiresAt,
-name, url, shop, size; index theo savedAt/url) và `data` (data-URL của PDF).
-Dọn dẹp bằng `chrome.alarms` mỗi 12 giờ + khi service worker dậy; quá 500MB xoá
-FIFO. Viewer mở từ lịch sử dùng `viewer.html?src=archive&id=...` và không lưu lại
-bản thứ hai.
+name, url, code, shop, size; index theo savedAt/url) và `data` (data-URL của PDF).
+Tất cả thao tác chạy trong trang viewer/history (IndexedDB của trang extension luôn
+sống, không phụ thuộc service worker). Quét hết hạn chạy khi mở viewer/trang lịch
+sử, throttle 1 lần/giờ; quá 500MB xoá FIFO. Viewer mở từ lịch sử dùng
+`viewer.html?src=archive&id=...` và không lưu lại bản thứ hai.
 
 **Luồng hoạt động (link như TikTok):** bấm In trên sàn → tab mới điều hướng tới URL
 PDF → `webRequest.onHeadersReceived` thấy response PDF (Content-Type `application/pdf`
