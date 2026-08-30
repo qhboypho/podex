@@ -62,6 +62,9 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 - Mặc định giữ **30 ngày** rồi tự xoá (quét khi mở viewer/trang lịch sử, tối đa
   1 lần/giờ). Tắt bằng công tắc **Lưu lịch sử PDF đã in** trong popup.
 - Giới hạn tổng dung lượng ~500MB: quá giới hạn thì đơn cũ nhất bị xoá trước (FIFO).
+- **Xuất backup / Nhập backup**: lưu toàn bộ lịch sử ra 1 file `.json` và khôi phục
+  lại khi cần (đổi máy, đổi trình duyệt, lỡ xoá dữ liệu trang web) — nhập vào tự
+  bỏ qua file trùng; file đã quá hạn TTL sẽ bị dọn tự động sau khi nhập.
 - In cùng một link trong 2 phút không lưu trùng bản (dedupe theo URL).
 
 ## Kiến trúc

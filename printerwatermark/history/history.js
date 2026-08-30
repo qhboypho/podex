@@ -256,6 +256,70 @@ async function importPdf(e) {
   }
 }
 
+async function exportBackup() {
+  if (!all.length) {
+    toastMsg('Chưa có gì để backup.');
+    return;
+  }
+  toastMsg('Đang tạo file backup...');
+  try {
+    const records = [];
+    for (const m of all) {
+      const rec = await PWArchive.getFull(m.id);
+      if (rec && rec.data) {
+        records.push({
+          id: rec.id, savedAt: rec.savedAt, expiresAt: rec.expiresAt,
+          name: rec.name, file: rec.file, url: rec.url, code: rec.code,
+          prod: rec.prod, shop: rec.shop, prefix: rec.prefix, seq: rec.seq,
+          size: rec.size, data: rec.data
+        });
+      }
+    }
+    const payload = {
+      app: 'watermark-in-don',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      records
+    };
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const d = new Date();
+    const fname = 'pw-backup-' + dayKey(Date.now()).replace(/-/g, '') + '-' +
+      String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + '.json';
+    const dl = await chrome.downloads.download({ url, filename: fname, saveAs: true });
+    if (dl) {
+      chrome.downloads.onChanged.addListener(function listener(ev) {
+        if (ev.id === dl && (ev.state && (ev.state.current === 'complete' || ev.state.current === 'interrupted'))) {
+          chrome.downloads.onChanged.removeListener(listener);
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }
+      });
+    }
+    toastMsg('Đã xuất backup: ' + fname);
+  } catch (err) {
+    showError('Xuất backup lỗi: ' + (err && err.message || err));
+  }
+}
+
+async function importBackup(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const parsed = JSON.parse(await f.text());
+    const records = parsed && Array.isArray(parsed.records) ? parsed.records : null;
+    if (!records) {
+      toastMsg('File backup không hợp lệ.');
+      return;
+    }
+    toastMsg('Đang nhập ' + records.length + ' file...');
+    const r = await PWArchive.importRecords(records);
+    toastMsg('Đã nhập ' + r.added + ' file, bỏ qua ' + r.skipped + ' file (trùng hoặc không hợp lệ).');
+    await load();
+  } catch (err) {
+    showError('Nhập backup lỗi: ' + (err && err.message || err));
+  }
+}
+
 function wire() {
   $('#q').addEventListener('input', render);
   const range = $('#range');
@@ -272,6 +336,9 @@ function wire() {
   $('#refresh').onclick = load;
   $('#addPdf').onclick = () => { $('#pdfInput').value = ''; $('#pdfInput').click(); };
   $('#pdfInput').addEventListener('change', importPdf);
+  $('#exportBtn').onclick = exportBackup;
+  $('#importBtn').onclick = () => { $('#importInput').value = ''; $('#importInput').click(); };
+  $('#importInput').addEventListener('change', importBackup);
   $('#clearAll').onclick = async () => {
     if (!all.length) return;
     if (!confirm('Xoá TOÀN BỘ ' + all.length + ' đơn đã lưu? Không thể hoàn tác.')) return;

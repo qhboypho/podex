@@ -207,6 +207,45 @@ const PWArchive = (() => {
     await done(tx);
   }
 
+  async function importRecords(records) {
+    if (!Array.isArray(records)) return { added: 0, skipped: 0 };
+    const db = await open();
+    let added = 0;
+    let skipped = 0;
+    for (const r of records) {
+      if (!r || !r.id || typeof r.data !== 'string' || r.data.indexOf('data:application/pdf') !== 0) {
+        skipped++;
+        continue;
+      }
+      const savedAt = r.savedAt || Date.now();
+      const meta = {
+        id: r.id,
+        savedAt,
+        expiresAt: r.expiresAt || savedAt + 30 * 86400000,
+        name: r.name || 'don-hang.pdf',
+        file: r.file || '',
+        url: r.url || '',
+        code: r.code || '',
+        prod: r.prod || '',
+        shop: r.shop || '',
+        prefix: r.prefix || '',
+        seq: r.seq || 0,
+        size: r.size || Math.floor((r.data.length - r.data.indexOf(',') - 1) * 3 / 4)
+      };
+      try {
+        const tx = db.transaction([META, DATA], 'readwrite');
+        tx.objectStore(META).put(meta);
+        tx.objectStore(DATA).put({ id: r.id, data: r.data });
+        await done(tx);
+        added++;
+      } catch (e) {
+        skipped++;
+      }
+    }
+    maybeSweep();
+    return { added, skipped };
+  }
+
   async function sweep() {
     const cfg = await config();
     const cutoff = Date.now() - cfg.days * 86400000;
@@ -235,5 +274,5 @@ const PWArchive = (() => {
     } catch (e) { /* ignore */ }
   }
 
-  return { save, list, getFull, remove, clear, sweep, maybeSweep };
+  return { save, list, getFull, remove, clear, sweep, maybeSweep, importRecords };
 })();

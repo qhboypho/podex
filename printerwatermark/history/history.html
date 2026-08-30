@@ -22,8 +22,11 @@
     <input id="dayPick" type="date" class="hidden" title="Xem file của một ngày">
     <button id="addPdf" title="Thêm file PDF bất kỳ vào lịch sử">+ Thêm PDF</button>
     <button id="refresh" title="Làm mới danh sách">Làm mới</button>
+    <button id="exportBtn" title="Lưu toàn bộ lịch sử ra file backup .json">Xuất backup</button>
+    <button id="importBtn" title="Khôi phục lịch sử từ file backup">Nhập backup</button>
     <button id="clearAll" class="danger" title="Xoá toàn bộ lịch sử đã lưu">Xoá tất cả</button>
   </div>
+  <input type="file" id="importInput" accept=".json,application/json" hidden>
   <main id="list"></main>
   <div id="pageError" class="hidden"></div>
   <div id="empty" class="hidden">
