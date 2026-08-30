@@ -165,7 +165,7 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
     console.info('[PW] Lưu lịch sử:', name || docName, srcUrl || '(không có link)');
     PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod)
       .then(r => {
-        if (r && r.ok && r.dup) toast('Đơn này đã có trong lịch sử.');
+        if (r && r.ok && r.dup) toast('Đã có trong lịch sử: ' + (r.name || 'đơn') + ' — không lưu trùng.');
         else if (r && r.ok) toast('Đã lưu lịch sử: ' + (r.name || 'đơn'));
         else toast('Không lưu được lịch sử: ' + (r && r.error || 'lỗi không rõ'));
       })

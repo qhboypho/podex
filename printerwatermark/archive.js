@@ -86,7 +86,7 @@ const PWArchive = (() => {
       da.getDate() === db.getDate();
   }
 
-  async function nextName(url, now) {
+  function nextNameFrom(metas, url, now) {
     const d = new Date(now);
     const stamp =
       String(d.getDate()).padStart(2, '0') +
@@ -94,19 +94,26 @@ const PWArchive = (() => {
       d.getFullYear();
     const prefix = shopPrefix(url);
     let seq = 1;
-    try {
-      const metas = await list();
-      for (const m of metas) {
-        if (m.prefix === prefix && sameLocalDay(m.savedAt, now)) {
-          seq = Math.max(seq, (m.seq || 0) + 1);
-        }
+    for (const m of metas) {
+      if (m.prefix === prefix && sameLocalDay(m.savedAt, now)) {
+        seq = Math.max(seq, (m.seq || 0) + 1);
       }
-    } catch (e) { /* giữ seq = 1 */ }
+    }
     return {
       name: prefix + stamp + '-' + String(seq).padStart(2, '0') + '.pdf',
       prefix,
       seq
     };
+  }
+
+  async function sha256Hex(data) {
+    try {
+      const buf = await (await fetch(data)).arrayBuffer();
+      const dig = await crypto.subtle.digest('SHA-256', buf);
+      return Array.from(new Uint8Array(dig)).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      return '';
+    }
   }
 
   async function save(data, name, url, code, origName, prod) {
@@ -116,28 +123,33 @@ const PWArchive = (() => {
     const cfg = await config();
     if (!cfg.enabled) return { ok: false, error: 'disabled' };
     url = url || '';
-    if (url) {
-      try {
-        const db = await open();
-        const dup = await new Promise((resolve) => {
-          const tx = db.transaction(META, 'readonly');
-          const rq = tx.objectStore(META).index('url').get(url);
-          rq.onsuccess = () => resolve(rq.result || null);
-          rq.onerror = () => resolve(null);
-        });
-        if (dup && Date.now() - (dup.savedAt || 0) < DEDUPE_MS) {
-          return { ok: true, id: dup.id, dup: true };
-        }
-      } catch (e) { /* bỏ qua lỗi dedupe */ }
-    }
-    const id = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const now = Date.now();
     const b64 = data.slice(data.indexOf(',') + 1);
+    const size = Math.floor(b64.length * 3 / 4);
+    const hash = await sha256Hex(data);
+    const codes = String(code || '').trim().split(/\s+/).filter(Boolean);
+    const primary = codes[0] || '';
+    let metas = [];
+    try { metas = await list(); } catch (e) { }
+
+    // Chống lưu trùng: trùng hash (file giống hệt) > trùng URL gần đây
+    // > cùng sàn + cùng dung lượng + cùng mã đơn chính trong cùng ngày
+    // (file sàn regenerate có timestamp mới nên hash khác, nhưng nội dung như nhau).
+    const dup = metas.find(m =>
+      (hash && m.hash === hash) ||
+      (url && m.url === url && now - (m.savedAt || 0) < DEDUPE_MS) ||
+      (url && primary && sameLocalDay(m.savedAt || 0, now) &&
+        m.prefix === shopPrefix(url) && (m.size || 0) === size &&
+        ((m.code || '').trim().split(/\s+/)[0] || '') === primary)
+    );
+    if (dup) return { ok: true, id: dup.id, dup: true, name: dup.name };
+
+    const id = 'a' + now.toString(36) + Math.random().toString(36).slice(2, 8);
     let finalName = name || 'don-hang.pdf';
     let prefix = '';
     let seq = 0;
     if (url) {
-      const nm = await nextName(url, now);
+      const nm = nextNameFrom(metas, url, now);
       finalName = nm.name;
       prefix = nm.prefix;
       seq = nm.seq;
@@ -154,7 +166,8 @@ const PWArchive = (() => {
       shop: shopFromUrl(url),
       prefix,
       seq,
-      size: Math.floor(b64.length * 3 / 4)
+      size,
+      hash
     };
     const db = await open();
     const tx = db.transaction([META, DATA], 'readwrite');
