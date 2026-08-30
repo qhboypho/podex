@@ -199,10 +199,22 @@ async function load() {
   updateStats();
 }
 
+let toastTimer = null;
+function toastMsg(msg) {
+  const t = $('#toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
 function wire() {
   $('#q').addEventListener('input', render);
   $('#days').addEventListener('change', render);
   $('#refresh').onclick = load;
+  $('#addPdf').onclick = () => { $('#pdfInput').value = ''; $('#pdfInput').click(); };
+  $('#pdfInput').addEventListener('change', importPdf);
   $('#clearAll').onclick = async () => {
     if (!all.length) return;
     if (!confirm('Xoá TOÀN BỘ ' + all.length + ' đơn đã lưu? Không thể hoàn tác.')) return;
@@ -211,6 +223,30 @@ function wire() {
     render();
     updateStats();
   };
+}
+
+async function importPdf(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (!(bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46)) {
+      toastMsg('File này không phải PDF.');
+      return;
+    }
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    const dataUrl = 'data:application/pdf;base64,' + btoa(bin);
+    const r = await PWArchive.save(dataUrl, f.name, '', '', f.name);
+    if (r && r.ok) toastMsg('Đã thêm vào lịch sử: ' + f.name);
+    else toastMsg('Không lưu được: ' + (r && r.error || 'lỗi không rõ'));
+    await load();
+  } catch (err) {
+    showError('Không thêm được PDF: ' + (err && err.message || err));
+  }
 }
 
 wire();

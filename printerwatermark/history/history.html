@@ -18,6 +18,7 @@
       <option value="7">7 ngày qua</option>
       <option value="30" selected>30 ngày qua</option>
     </select>
+    <button id="addPdf" title="Thêm file PDF bất kỳ vào lịch sử">+ Thêm PDF</button>
     <button id="refresh" title="Làm mới danh sách">Làm mới</button>
     <button id="clearAll" class="danger" title="Xoá toàn bộ lịch sử đã lưu">Xoá tất cả</button>
   </div>
@@ -26,8 +27,11 @@
   <div id="empty" class="hidden">
     <p><b>Chưa có đơn nào được lưu.</b></p>
     <p>Bấm <b>In đơn</b> trên sàn như bình thường — extension sẽ tự lưu bản PDF lại đây
-    (mặc định giữ 30 ngày rồi tự xoá).</p>
+    (mặc định giữ 30 ngày rồi tự xoá). Đơn in trước khi cập nhật extension sẽ không có
+    trong lịch sử; nếu còn file PDF, bấm <b>+ Thêm PDF</b> ở trên để đưa vào.</p>
   </div>
+  <input type="file" id="pdfInput" accept="application/pdf" hidden>
+  <div id="toast" class="hidden"></div>
   <script src="../archive.js"></script>
   <script src="history.js"></script>
 </body>
