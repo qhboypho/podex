@@ -49,10 +49,13 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 
 - Mỗi lần PDF in đơn mở qua extension (TikTok, Shopee, Lazada...) là bản PDF được
   **tự lưu vào IndexedDB** ngay trên máy — không gửi lên đâu cả.
-- Extension **tự đọc mã đơn (Order ID / mã vận đơn)** từ nội dung phiếu và đặt tên
-  bản lưu kiểu `Đơn 5880066676216131551.pdf` — chỉ cần gõ mã đơn khiếu nại là tìm ra.
+- Extension **tự đặt tên theo ngày lưu**: `<sàn><ddmmyyyy>-<số thứ tự trong ngày>.pdf`,
+  ví dụ `tiktok31082026-02.pdf` = file thứ 2 lưu trong ngày 31/08/2026 của sàn
+  TikTok (đếm riêng theo từng sàn; xoá file trong ngày không làm trùng số).
+- Extension **tự đọc mã đơn (Order ID / mã vận đơn)** từ nội dung phiếu — tìm kiếm
+  history bằng mã vận đơn vẫn ra đúng đơn dù tên file đã đổi theo format ngày.
 - Vào popup → **Lịch sử đơn đã in** để tìm lại: ô tìm kiếm khớp mã đơn, tên file,
-  link gốc và tên sàn; lọc theo thời gian.
+  link gốc và tên sàn; lọc theo thời gian. Bấm vào dòng bất kỳ để mở lại đúng file.
 - Bấm **Xem & In** để mở lại đúng phiếu bằng trình watermark và in như thường;
   **Tải PDF** để lấy file gốc.
 - Mặc định giữ **30 ngày** rồi tự xoá (quét khi mở viewer/trang lịch sử, tối đa

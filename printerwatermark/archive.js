@@ -59,6 +59,56 @@ const PWArchive = (() => {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
+  function shopPrefix(url) {
+    try {
+      const h = new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+      const brands = ['tiktok', 'shopee', 'lazada', 'tiki', 'sendo', 'amazon', 'ebay', 'etsy'];
+      for (const b of brands) {
+        if (h.indexOf(b) !== -1) return b;
+      }
+      const skip = new Set(['seller', 'banhang', 'marketplace', 'center', 'www', 'com', 'vn', 'net', 'shop']);
+      for (const part of h.split('.')) {
+        for (const seg of part.split('-')) {
+          if (seg && !skip.has(seg)) return seg;
+        }
+      }
+      return 'pdf';
+    } catch (e) {
+      return 'pdf';
+    }
+  }
+
+  function sameLocalDay(a, b) {
+    const da = new Date(a);
+    const db = new Date(b);
+    return da.getFullYear() === db.getFullYear() &&
+      da.getMonth() === db.getMonth() &&
+      da.getDate() === db.getDate();
+  }
+
+  async function nextName(url, now) {
+    const d = new Date(now);
+    const stamp =
+      String(d.getDate()).padStart(2, '0') +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      d.getFullYear();
+    const prefix = shopPrefix(url);
+    let seq = 1;
+    try {
+      const metas = await list();
+      for (const m of metas) {
+        if (m.prefix === prefix && sameLocalDay(m.savedAt, now)) {
+          seq = Math.max(seq, (m.seq || 0) + 1);
+        }
+      }
+    } catch (e) { /* giữ seq = 1 */ }
+    return {
+      name: prefix + stamp + '-' + String(seq).padStart(2, '0') + '.pdf',
+      prefix,
+      seq
+    };
+  }
+
   async function save(data, name, url, code, origName) {
     if (!data || typeof data !== 'string' || data.indexOf('data:application/pdf') !== 0) {
       return { ok: false, error: 'Du lieu PDF khong hop le' };
@@ -83,15 +133,26 @@ const PWArchive = (() => {
     const id = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const now = Date.now();
     const b64 = data.slice(data.indexOf(',') + 1);
+    let finalName = name || 'don-hang.pdf';
+    let prefix = '';
+    let seq = 0;
+    if (url) {
+      const nm = await nextName(url, now);
+      finalName = nm.name;
+      prefix = nm.prefix;
+      seq = nm.seq;
+    }
     const meta = {
       id,
       savedAt: now,
       expiresAt: now + cfg.days * 86400000,
-      name: name || 'don-hang.pdf',
+      name: finalName,
       file: origName || '',
       url,
       code: code || '',
       shop: shopFromUrl(url),
+      prefix,
+      seq,
       size: Math.floor(b64.length * 3 / 4)
     };
     const db = await open();
@@ -100,7 +161,7 @@ const PWArchive = (() => {
     tx.objectStore(DATA).put({ id, data });
     await done(tx);
     maybeSweep();
-    return { ok: true, id };
+    return { ok: true, id, name: meta.name };
   }
 
   async function list() {

@@ -156,13 +156,11 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
   if (!ok || skipArchive || !dataUrl) return;
   try {
     const codes = await extractOrderCodes();
-    const primary = codes[0] || '';
-    const archiveName = primary ? ('Đơn ' + primary + '.pdf') : (name || docName);
-    console.info('[PW] Lưu lịch sử:', archiveName, srcUrl || '(không có link)');
-    PWArchive.save(dataUrl, archiveName, srcUrl || '', codes.join(' '), name || docName)
+    console.info('[PW] Lưu lịch sử:', name || docName, srcUrl || '(không có link)');
+    PWArchive.save(dataUrl, name || docName, srcUrl || '', codes.join(' '), name || docName)
       .then(r => {
         if (r && r.ok && r.dup) toast('Đơn này đã có trong lịch sử.');
-        else if (r && r.ok) toast('Đã lưu lịch sử: ' + archiveName);
+        else if (r && r.ok) toast('Đã lưu lịch sử: ' + (r.name || 'đơn'));
         else toast('Không lưu được lịch sử: ' + (r && r.error || 'lỗi không rõ'));
       })
       .catch(e => {
