@@ -79,19 +79,21 @@ function render() {
   for (const m of list) {
     const item = document.createElement('div');
     item.className = 'item';
+    item.title = 'Bấm để mở lại & in: ' + (m.name || 'don-hang.pdf');
+    item.onclick = () => openRecord(m.id);
 
     const info = document.createElement('div');
     info.className = 'info';
     const name = document.createElement('div');
     name.className = 'name';
     name.textContent = m.name || 'don-hang.pdf';
-    name.title = m.name || '';
     const meta = document.createElement('div');
     meta.className = 'meta';
     const bits = [
       { cls: 'time', text: fmtTime(m.savedAt) },
       { cls: 'shop', text: m.shop || '' },
       { cls: 'code', text: m.code || extractCode(m.url) },
+      { cls: 'file', text: (m.file && m.file !== m.name) ? ('file: ' + m.file) : '' },
       { cls: 'size', text: fmtSize(m.size) }
     ].filter(b => b.text);
     for (const b of bits) {
@@ -108,23 +110,20 @@ function render() {
     const btnOpen = document.createElement('button');
     btnOpen.className = 'mini';
     btnOpen.textContent = 'Xem & In';
-    btnOpen.onclick = () => {
-      chrome.tabs.create({
-        url: chrome.runtime.getURL('viewer/viewer.html?src=archive&id=' + encodeURIComponent(m.id))
-      });
-    };
+    btnOpen.onclick = e => { e.stopPropagation(); openRecord(m.id); };
 
     const btnDl = document.createElement('button');
     btnDl.className = 'mini';
     btnDl.textContent = 'Tải PDF';
-    btnDl.onclick = () => downloadItem(m, btnDl);
+    btnDl.onclick = e => { e.stopPropagation(); downloadItem(m, btnDl); };
 
     const btnDel = document.createElement('button');
     btnDel.className = 'mini danger';
     btnDel.textContent = 'Xoá';
-    btnDel.onclick = async () => {
+    btnDel.onclick = async e => {
+      e.stopPropagation();
       if (!confirm('Xoá đơn "' + (m.name || 'don-hang.pdf') + '" khỏi lịch sử?')) return;
-      try { await PWArchive.remove(m.id); } catch (e) { }
+      try { await PWArchive.remove(m.id); } catch (err) { }
       all = all.filter(x => x.id !== m.id);
       render();
       updateStats();
@@ -141,6 +140,12 @@ function render() {
     p.textContent = 'Không có đơn nào khớp bộ lọc.';
     box.append(p);
   }
+}
+
+function openRecord(id) {
+  chrome.tabs.create({
+    url: chrome.runtime.getURL('viewer/viewer.html?src=archive&id=' + encodeURIComponent(id))
+  });
 }
 
 async function downloadItem(m, btn) {
@@ -168,13 +173,9 @@ async function downloadItem(m, btn) {
 }
 
 async function updateStats() {
-  let usage = 0;
-  try {
-    const est = await navigator.storage.estimate();
-    usage = est.usage || 0;
-  } catch (e) { }
+  const total = all.reduce((s, m) => s + (m.size || 0), 0);
   const parts = [all.length + ' đơn đã lưu'];
-  if (usage) parts.push('dùng ' + fmtSize(usage));
+  if (total) parts.push('dùng ' + fmtSize(total));
   try {
     const cfg = await chrome.storage.sync.get({ archiveDays: 30 });
     parts.push('giữ ' + cfg.archiveDays + ' ngày rồi tự xoá');

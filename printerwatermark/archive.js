@@ -59,7 +59,7 @@ const PWArchive = (() => {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
-  async function save(data, name, url, code) {
+  async function save(data, name, url, code, origName) {
     if (!data || typeof data !== 'string' || data.indexOf('data:application/pdf') !== 0) {
       return { ok: false, error: 'Du lieu PDF khong hop le' };
     }
@@ -88,6 +88,7 @@ const PWArchive = (() => {
       savedAt: now,
       expiresAt: now + cfg.days * 86400000,
       name: name || 'don-hang.pdf',
+      file: origName || '',
       url,
       code: code || '',
       shop: shopFromUrl(url),

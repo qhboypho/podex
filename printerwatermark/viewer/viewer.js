@@ -118,7 +118,7 @@ async function loadPdfBytes(bytes, name) {
   return ok;
 }
 
-async function extractOrderCode() {
+async function extractOrderCodes() {
   try {
     let text = '';
     const max = Math.min(2, pdfDoc.numPages || 1);
@@ -127,18 +127,20 @@ async function extractOrderCode() {
       const tc = await page.getTextContent();
       text += tc.items.map(it => it.str || '').join(' ') + '\n';
     }
-    const patterns = [
-      /order[\s_-]*id[:\s#]*([0-9]{8,25})/i,
-      /\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/i,
-      /\b([0-9]{12,22})\b/
-    ];
-    for (const re of patterns) {
-      const m = text.match(re);
-      if (m) return m[1];
-    }
-    return '';
+    const found = [];
+    const push = s => {
+      if (s && !found.includes(s) && found.length < 4) found.push(s);
+    };
+    const orderId = text.match(/order[\s_-]*id[:\s#]*([0-9]{8,25})/i);
+    if (orderId) push(orderId[1]);
+    const carrier = text.match(/\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/i);
+    if (carrier) push(carrier[1].toUpperCase());
+    let m;
+    const digitRe = /\b([0-9]{12,22})\b/g;
+    while ((m = digitRe.exec(text)) && found.length < 4) push(m[1]);
+    return found;
   } catch (e) {
-    return '';
+    return [];
   }
 }
 
@@ -146,13 +148,20 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
   const ok = await loadPdfBytes(dataUrlToBytes(dataUrl), name);
   if (!ok || skipArchive || !dataUrl) return;
   try {
-    const code = await extractOrderCode();
-    const archiveName = code ? ('Đơn ' + code + '.pdf') : (name || docName);
-    PWArchive.save(dataUrl, archiveName, srcUrl || '', code)
+    const codes = await extractOrderCodes();
+    const primary = codes[0] || '';
+    const archiveName = primary ? ('Đơn ' + primary + '.pdf') : (name || docName);
+    console.info('[PW] Lưu lịch sử:', archiveName, srcUrl || '(không có link)');
+    PWArchive.save(dataUrl, archiveName, srcUrl || '', codes.join(' '), name || docName)
       .then(r => {
-        if (r && r.ok && !r.dup) toast('Đã lưu vào lịch sử đơn đã in.');
+        if (r && r.ok && r.dup) toast('Đơn này đã có trong lịch sử.');
+        else if (r && r.ok) toast('Đã lưu lịch sử: ' + archiveName);
+        else toast('Không lưu được lịch sử: ' + (r && r.error || 'lỗi không rõ'));
       })
-      .catch(() => { });
+      .catch(e => {
+        toast('Không lưu được lịch sử: ' + (e && e.message || e));
+        try { console.error('[PW] archive save failed', e); } catch (e2) { }
+      });
   } catch (e) { /* ignore */ }
 }
 
