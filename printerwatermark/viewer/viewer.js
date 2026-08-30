@@ -12,6 +12,10 @@ let zoom = 'fit';
 let editing = false;
 let cfg = { enabled: true, layers: [] };
 let skipArchive = false;
+let searchIndex = null;
+let searchHits = [];
+let searchCurrent = -1;
+let searchToken = 0;
 
 const imgCache = new Map();
 let drag = null;
@@ -108,6 +112,9 @@ async function loadPdfBytes(bytes, name) {
   try {
     pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
     docName = name || 'don-hang.pdf';
+    searchIndex = null;
+    searchHits = [];
+    searchCurrent = -1;
     await renderAllPages();
     ok = true;
   } catch (e) {
@@ -163,6 +170,133 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
         try { console.error('[PW] archive save failed', e); } catch (e2) { }
       });
   } catch (e) { /* ignore */ }
+}
+
+// ---------- tìm kiếm trong PDF ----------
+async function buildSearchIndex() {
+  const out = [];
+  for (let i = 1; i <= pdfDoc.numPages; i++) {
+    const page = await pdfDoc.getPage(i);
+    const tc = await page.getTextContent();
+    const p = pages[i - 1];
+    const vp = page.getViewport({ scale: p ? p.scale : 1.5 });
+    const items = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const tx = pdfjsLib.Util.transform(vp.transform, it.transform);
+      const h = Math.hypot(tx[2], tx[3]) || 10;
+      items.push({
+        str: it.str,
+        x: tx[4],
+        y: tx[5] - h,
+        w: (it.width || 0) * vp.scale,
+        h
+      });
+    }
+    out.push({
+      page: i,
+      items,
+      joined: items.map(x => x.str).join(' ').toLowerCase()
+    });
+  }
+  return out;
+}
+
+function drawHighlights() {
+  for (const p of pages) {
+    if (!p.hl) continue;
+    p.hl.getContext('2d').clearRect(0, 0, p.hl.width, p.hl.height);
+  }
+  for (let i = 0; i < searchHits.length; i++) {
+    const hit = searchHits[i];
+    const p = pages[hit.page - 1];
+    if (!p || !p.hl) continue;
+    const c = p.hl.getContext('2d');
+    const cur = i === searchCurrent;
+    c.fillStyle = cur ? 'rgba(255,152,0,.62)' : 'rgba(255,235,59,.5)';
+    c.strokeStyle = cur ? '#e65100' : '#f9a825';
+    c.lineWidth = 2;
+    if (hit.whole) {
+      c.strokeRect(5, 5, p.hl.width - 10, p.hl.height - 10);
+      continue;
+    }
+    const pad = 2;
+    c.fillRect(hit.x - pad, hit.y - pad, hit.w + pad * 2, hit.h + pad * 2);
+    c.strokeRect(hit.x - pad, hit.y - pad, hit.w + pad * 2, hit.h + pad * 2);
+  }
+}
+
+function gotoHit(i) {
+  if (!searchHits.length) return;
+  searchCurrent = (i + searchHits.length) % searchHits.length;
+  const hit = searchHits[searchCurrent];
+  drawHighlights();
+  $('#searchCount').textContent = (searchCurrent + 1) + '/' + searchHits.length;
+  const el = pages[hit.page - 1] && pages[hit.page - 1].el;
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function performSearch(qRaw) {
+  const q = (qRaw || '').trim().toLowerCase();
+  searchHits = [];
+  searchCurrent = -1;
+  const count = $('#searchCount');
+  if (!q) {
+    drawHighlights();
+    count.textContent = '';
+    return;
+  }
+  if (!pdfDoc) return;
+  const myToken = ++searchToken;
+  if (!searchIndex) {
+    setBusy('Đang quét nội dung PDF...');
+    try {
+      searchIndex = await buildSearchIndex();
+    } catch (e) {
+      searchIndex = [];
+    }
+    setBusy(null);
+  }
+  if (myToken !== searchToken) return;
+
+  for (const pg of searchIndex) {
+    const pageHits = [];
+    for (const it of pg.items) {
+      const s = it.str.toLowerCase();
+      let pos = s.indexOf(q);
+      while (pos !== -1) {
+        const start = it.str.length ? pos / it.str.length : 0;
+        const frac = it.str.length ? q.length / it.str.length : 1;
+        pageHits.push({
+          page: pg.page,
+          x: it.x + it.w * start,
+          y: it.y,
+          w: Math.max(it.w * frac, 8),
+          h: it.h
+        });
+        pos = s.indexOf(q, pos + q.length);
+      }
+    }
+    if (!pageHits.length) {
+      for (let i = 0; i + 1 < pg.items.length; i++) {
+        const comb = (pg.items[i].str + pg.items[i + 1].str).toLowerCase();
+        if (comb.includes(q)) {
+          for (const it of [pg.items[i], pg.items[i + 1]]) {
+            pageHits.push({ page: pg.page, x: it.x, y: it.y, w: it.w, h: it.h });
+          }
+        }
+      }
+    }
+    if (pageHits.length) searchHits.push(...pageHits);
+    else if (pg.joined.includes(q)) searchHits.push({ page: pg.page, whole: true });
+  }
+
+  drawHighlights();
+  if (!searchHits.length) {
+    count.textContent = '0 kết quả';
+    return;
+  }
+  gotoHit(0);
 }
 
 let lastFailedUrl = '';
@@ -272,6 +406,11 @@ async function renderAllPages() {
     base.height = Math.floor(vp.height);
     await page.render({ canvasContext: base.getContext('2d'), viewport: vp }).promise;
 
+    const hl = document.createElement('canvas');
+    hl.className = 'overlay-hl';
+    hl.width = base.width;
+    hl.height = base.height;
+
     const ovl = document.createElement('canvas');
     ovl.className = 'overlay';
     ovl.width = base.width;
@@ -280,10 +419,10 @@ async function renderAllPages() {
     const pageEl = document.createElement('div');
     pageEl.className = 'page';
     pageEl.dataset.page = i;
-    pageEl.append(base, ovl);
+    pageEl.append(base, hl, ovl);
     container.append(pageEl);
 
-    pages.push({ index: i, el: pageEl, base, ovl, ptW: vp1.width, ptH: vp1.height, scale });
+    pages.push({ index: i, el: pageEl, base, ovl, hl, ptW: vp1.width, ptH: vp1.height, scale });
   }
 
   showDropzone(false);
@@ -293,6 +432,7 @@ async function renderAllPages() {
   drawOverlays();
   buildHandles();
   preparePrintStyle();
+  drawHighlights();
 }
 
 function applyZoom() {
@@ -890,6 +1030,30 @@ async function downloadPdf() {
 function wireEvents() {
   $('#btnPrint').onclick = printPdf;
   $('#btnDownload').onclick = downloadPdf;
+
+  let searchTimer = null;
+  $('#searchBox').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => performSearch($('#searchBox').value), 300);
+  });
+  $('#searchBox').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      gotoHit(e.shiftKey ? searchCurrent - 1 : searchCurrent + 1);
+    } else if (e.key === 'Escape') {
+      $('#searchBox').value = '';
+      performSearch('');
+    }
+  });
+  $('#searchNext').onclick = () => gotoHit(searchCurrent + 1);
+  $('#searchPrev').onclick = () => gotoHit(searchCurrent - 1);
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      $('#searchBox').focus();
+      $('#searchBox').select();
+    }
+  });
 
   $('#btnOpenFile').onclick = () => { $('#fileInput').value = ''; $('#fileInput').click(); };
   $('#fileInput').addEventListener('change', e => {
