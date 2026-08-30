@@ -1060,6 +1060,9 @@ function wireEvents() {
   });
 
   $('#btnOpenFile').onclick = () => { $('#fileInput').value = ''; $('#fileInput').click(); };
+  $('#btnHistory').onclick = () => {
+    try { chrome.tabs.create({ url: chrome.runtime.getURL('history/history.html') }); } catch (e) { }
+  };
   $('#fileInput').addEventListener('change', e => {
     const f = e.target.files[0];
     if (f) loadPdfFile(f);
