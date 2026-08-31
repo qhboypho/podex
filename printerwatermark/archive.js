@@ -292,7 +292,6 @@ const PWArchive = (() => {
   function tgCaption(meta) {
     const lines = [
       meta.name || 'don-hang.pdf',
-      meta.code ? ('Mã: ' + meta.code) : '',
       meta.prod ? ('SP: ' + String(meta.prod).slice(0, 180)) : '',
       meta.shop ? ('Sàn: ' + meta.shop) : '',
       new Date(meta.savedAt).toLocaleString('vi-VN')

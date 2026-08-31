@@ -151,9 +151,32 @@ async function extractOrderInfo() {
     while ((m = digitRe.exec(allText)) && found.length < CODE_CAP) push(m[1]);
 
     let prod = '';
-    const prodRe = /(?:product\s*name|t[êe]n\s*s[aả]n\s*ph[aẩ]m)\s*[:\-]?\s*(.{4,150}?)(?=\s+(?:seller\s+)?sku\b|\s+qty\b|\s+order\s+id\b|\s+nickname\b|\s+m[ãa]\s*(?:sp|s[aả]n\s*ph[aẩ]m)|\s+ph[aâ]n\s*lo[aạ]i\b|$)/i;
-    const pm = firstText.match(prodRe);
-    if (pm) prod = pm[1].replace(/\s+/g, ' ').trim();
+    try {
+      const qIdx = firstText.search(/\bqty\b/i);
+      if (qIdx !== -1) {
+        let seg = firstText.slice(qIdx);
+        const stopM = seg.match(/qty\s*total|order\s*id|nickname|in\s+transit|ph[aâ]n\s*lo[aạ]i/i);
+        if (stopM) seg = seg.slice(0, stopM.index);
+        seg = seg
+          .replace(/^qty\b/i, ' ')
+          .replace(/\b(sku|seller|total)\b/gi, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const parts = seg.split(' ').filter(Boolean);
+        while (parts.length > 1 && /^\d+$/.test(parts[parts.length - 1])) parts.pop();
+        prod = parts.join(' ').trim();
+        if (prod.length < 8) prod = '';
+        if (prod.length > 150) prod = prod.slice(0, 150).trim();
+      }
+      if (!prod) {
+        const prodRe = /(?:product\s*name|t[êe]n\s*s[aả]n\s*ph[aẩ]m)\s*[:\-]?\s*(.{4,150}?)(?=\s+(?:seller\s+)?sku\b|\s+qty\b|\s+order\s+id\b|\s+nickname\b|\s+m[ãa]\s*(?:sp|s[aả]n\s*ph[aẩ]m)|\s+ph[aâ]n\s*lo[aạ]i|$)/i;
+        const pm = firstText.match(prodRe);
+        if (pm) {
+          const v = pm[1].replace(/\s+/g, ' ').trim();
+          if (!/^(sku|seller\s*sku|qty)$/i.test(v)) prod = v;
+        }
+      }
+    } catch (e) { }
     return { codes: found, prod };
   } catch (e) {
     return { codes: [], prod: '' };
