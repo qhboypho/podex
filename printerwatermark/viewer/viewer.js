@@ -127,29 +127,31 @@ async function loadPdfBytes(bytes, name) {
 
 async function extractOrderInfo() {
   try {
-    const texts = [];
-    const max = Math.min(2, pdfDoc.numPages || 1);
+    let allText = '';
+    let firstText = '';
+    const max = pdfDoc.numPages || 1;
     for (let i = 1; i <= max; i++) {
       const page = await pdfDoc.getPage(i);
       const tc = await page.getTextContent();
-      texts.push(tc.items.map(it => it.str || '').join(' '));
+      const t = tc.items.map(it => it.str || '').join(' ');
+      if (i === 1) firstText = t;
+      allText += t + '\n';
     }
-    const all = texts.join(' ');
     const found = [];
     const push = s => {
-      if (s && !found.includes(s) && found.length < 4) found.push(s);
+      if (s && found.indexOf(s) === -1 && found.length < 80) found.push(s);
     };
-    const orderId = all.match(/order[\s_-]*id[:\s#]*([0-9]{8,25})/i);
-    if (orderId) push(orderId[1]);
-    const carrier = all.match(/\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/i);
-    if (carrier) push(carrier[1].toUpperCase());
     let m;
+    const orderIdRe = /order[\s_-]*id[:\s#]*([0-9]{8,25})/gi;
+    while ((m = orderIdRe.exec(allText)) && found.length < 80) push(m[1]);
+    const carrierRe = /\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/gi;
+    while ((m = carrierRe.exec(allText)) && found.length < 80) push(m[1].toUpperCase());
     const digitRe = /\b([0-9]{12,22})\b/g;
-    while ((m = digitRe.exec(all)) && found.length < 4) push(m[1]);
+    while ((m = digitRe.exec(allText)) && found.length < 80) push(m[1]);
 
     let prod = '';
     const prodRe = /(?:product\s*name|t[êe]n\s*s[aả]n\s*ph[aẩ]m)\s*[:\-]?\s*(.{4,150}?)(?=\s+(?:seller\s+)?sku\b|\s+qty\b|\s+order\s+id\b|\s+nickname\b|\s+m[ãa]\s*(?:sp|s[aả]n\s*ph[aẩ]m)|\s+ph[aâ]n\s*lo[aạ]i\b|$)/i;
-    const pm = texts[0].match(prodRe);
+    const pm = firstText.match(prodRe);
     if (pm) prod = pm[1].replace(/\s+/g, ' ').trim();
     return { codes: found, prod };
   } catch (e) {
@@ -161,7 +163,10 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
   const ok = await loadPdfBytes(dataUrlToBytes(dataUrl), name);
   if (!ok || skipArchive || !dataUrl) return;
   try {
-    const info = await extractOrderInfo();
+    const info = await (async () => {
+      setBusy('Đang đọc mã đơn trong file...');
+      try { return await extractOrderInfo(); } finally { setBusy(null); }
+    })();
     console.info('[PW] Lưu lịch sử:', name || docName, srcUrl || '(không có link)');
     PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod)
       .then(r => {
