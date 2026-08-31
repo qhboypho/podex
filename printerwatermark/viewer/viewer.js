@@ -138,16 +138,17 @@ async function extractOrderInfo() {
       allText += t + '\n';
     }
     const found = [];
+    const CODE_CAP = 500;
     const push = s => {
-      if (s && found.indexOf(s) === -1 && found.length < 80) found.push(s);
+      if (s && found.indexOf(s) === -1 && found.length < CODE_CAP) found.push(s);
     };
     let m;
     const orderIdRe = /order[\s_-]*id[:\s#]*([0-9]{8,25})/gi;
-    while ((m = orderIdRe.exec(allText)) && found.length < 80) push(m[1]);
+    while ((m = orderIdRe.exec(allText)) && found.length < CODE_CAP) push(m[1]);
     const carrierRe = /\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/gi;
-    while ((m = carrierRe.exec(allText)) && found.length < 80) push(m[1].toUpperCase());
+    while ((m = carrierRe.exec(allText)) && found.length < CODE_CAP) push(m[1].toUpperCase());
     const digitRe = /\b([0-9]{12,22})\b/g;
-    while ((m = digitRe.exec(allText)) && found.length < 80) push(m[1]);
+    while ((m = digitRe.exec(allText)) && found.length < CODE_CAP) push(m[1]);
 
     let prod = '';
     const prodRe = /(?:product\s*name|t[êe]n\s*s[aả]n\s*ph[aẩ]m)\s*[:\-]?\s*(.{4,150}?)(?=\s+(?:seller\s+)?sku\b|\s+qty\b|\s+order\s+id\b|\s+nickname\b|\s+m[ãa]\s*(?:sp|s[aả]n\s*ph[aẩ]m)|\s+ph[aâ]n\s*lo[aạ]i\b|$)/i;
