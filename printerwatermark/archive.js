@@ -116,7 +116,7 @@ const PWArchive = (() => {
     }
   }
 
-  async function save(data, name, url, code, origName, prod) {
+  async function save(data, name, url, code, origName, prod, count) {
     if (!data || typeof data !== 'string' || data.indexOf('data:application/pdf') !== 0) {
       return { ok: false, error: 'Du lieu PDF khong hop le' };
     }
@@ -166,6 +166,7 @@ const PWArchive = (() => {
       shop: shopFromUrl(url),
       prefix,
       seq,
+      count: Math.max(0, Number(count) || 0),
       size,
       hash
     };
@@ -242,6 +243,7 @@ const PWArchive = (() => {
         code: r.code || '',
         prod: r.prod || '',
         shop: r.shop || '',
+        count: Math.max(0, Number(r.count) || 0),
         prefix: r.prefix || '',
         seq: r.seq || 0,
         size: r.size || Math.floor((r.data.length - r.data.indexOf(',') - 1) * 3 / 4)

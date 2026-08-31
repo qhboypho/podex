@@ -85,7 +85,16 @@ function buildItem(m) {
   info.className = 'info';
   const name = document.createElement('div');
   name.className = 'name';
-  name.textContent = m.name || 'don-hang.pdf';
+  const nameText = document.createElement('span');
+  nameText.textContent = m.name || 'don-hang.pdf';
+  name.append(nameText);
+  if (m.count > 0) {
+    const badge = document.createElement('span');
+    badge.className = 'count';
+    badge.textContent = String(m.count);
+    badge.title = m.count + ' đơn trong file này';
+    name.append(badge);
+  }
   const meta = document.createElement('div');
   meta.className = 'meta';
   const bits = [

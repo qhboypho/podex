@@ -150,6 +150,17 @@ async function extractOrderInfo() {
     const digitRe = /\b([0-9]{12,22})\b/g;
     while ((m = digitRe.exec(allText)) && found.length < CODE_CAP) push(m[1]);
 
+    // Đếm số đơn bằng số header phiếu (đơn dài có thể tràn 2 trang nên
+    // đếm theo trang sẽ sai). Ưu tiên "Order ID", fallback: Product Name.
+    let count = 0;
+    const orderIdCount = allText.match(/order[\s_-]*id/gi);
+    if (orderIdCount && orderIdCount.length) {
+      count = orderIdCount.length;
+    } else {
+      const pnCount = allText.match(/product\s*name/gi);
+      count = pnCount ? pnCount.length : 0;
+    }
+
     let prod = '';
     try {
       const qIdx = firstText.search(/\bqty\b/i);
@@ -177,7 +188,7 @@ async function extractOrderInfo() {
         }
       }
     } catch (e) { }
-    return { codes: found, prod };
+    return { codes: found, prod, count };
   } catch (e) {
     return { codes: [], prod: '' };
   }
@@ -192,7 +203,7 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
       try { return await extractOrderInfo(); } finally { setBusy(null); }
     })();
     console.info('[PW] Lưu lịch sử:', name || docName, srcUrl || '(không có link)');
-    PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod)
+    PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod, info.count)
       .then(r => {
         if (r && r.ok && r.dup) toast('Đã có trong lịch sử: ' + (r.name || 'đơn') + ' — không lưu trùng.');
         else if (r && r.ok) toast('Đã lưu lịch sử: ' + (r.name || 'đơn'));
