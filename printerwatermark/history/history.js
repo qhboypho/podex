@@ -154,10 +154,12 @@ function render() {
     const key = dayKey(m.savedAt || 0);
     if (key !== lastKey) {
       lastKey = key;
-      const count = list.filter(x => dayKey(x.savedAt || 0) === key).length;
+      const group = list.filter(x => dayKey(x.savedAt || 0) === key);
+      const orders = group.reduce((s, x) => s + (x.count || 0), 0);
       const head = document.createElement('div');
       head.className = 'day-head';
-      head.textContent = fmtDay(m.savedAt) + ' — ' + count + ' file';
+      head.textContent = fmtDay(m.savedAt) + ' — ' + group.length + ' file' +
+        (orders ? ' · ' + orders + ' đơn' : '');
       box.append(head);
     }
     box.append(buildItem(m));
