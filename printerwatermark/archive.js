@@ -129,6 +129,7 @@ const PWArchive = (() => {
     const hash = await sha256Hex(data);
     const codes = String(code || '').trim().split(/\s+/).filter(Boolean);
     const primary = codes[0] || '';
+    const prefix = url ? shopPrefix(url) : '';
     let metas = [];
     try { metas = await list(); } catch (e) { }
 
@@ -184,12 +185,10 @@ const PWArchive = (() => {
 
     const id = 'a' + now.toString(36) + Math.random().toString(36).slice(2, 8);
     let finalName = name || 'don-hang.pdf';
-    let prefix = '';
     let seq = 0;
     if (url) {
       const nm = nextNameFrom(metas, url, now);
       finalName = nm.name;
-      prefix = nm.prefix;
       seq = nm.seq;
     }
     const meta = {
