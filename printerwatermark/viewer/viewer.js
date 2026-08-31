@@ -150,14 +150,16 @@ async function extractOrderInfo() {
     const digitRe = /\b([0-9]{12,22})\b/g;
     while ((m = digitRe.exec(allText)) && found.length < CODE_CAP) push(m[1]);
 
-    // Đếm số đơn bằng số header phiếu (đơn dài có thể tràn 2 trang nên
-    // đếm theo trang sẽ sai). Ưu tiên "Order ID", fallback: Product Name.
+    // Đếm số đơn bằng số GIÁ TRỊ Order ID duy nhất (nhãn in Order ID 2 vị trí
+    // mỗi phiếu nên đếm occurrence sẽ x2; đơn tràn trang cũng không ảnh hưởng).
     let count = 0;
-    const orderIdCount = allText.match(/order[\s_-]*id/gi);
-    if (orderIdCount && orderIdCount.length) {
-      count = orderIdCount.length;
+    const idSet = new Set();
+    const idRe = /order[\s_-]*id[:\s#]*([0-9]{8,25})/gi;
+    while ((m = idRe.exec(allText))) idSet.add(m[1]);
+    if (idSet.size) {
+      count = idSet.size;
     } else {
-      const pnCount = allText.match(/product\s*name/gi);
+      const pnCount = allText.match(/product\s+name/gi);
       count = pnCount ? pnCount.length : 0;
     }
 

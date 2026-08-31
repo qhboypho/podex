@@ -142,7 +142,26 @@ const PWArchive = (() => {
         m.prefix === shopPrefix(url) && (m.size || 0) === size &&
         ((m.code || '').trim().split(/\s+/)[0] || '') === primary)
     );
-    if (dup) return { ok: true, id: dup.id, dup: true, name: dup.name };
+    if (dup) {
+      // In lại file đã có: làm mới metadata (mã + số đơn) thay vì lưu trùng
+      try {
+        const db = await open();
+        const tx = db.transaction(META, 'readwrite');
+        const st = tx.objectStore(META);
+        const rq = st.get(dup.id);
+        rq.onsuccess = () => {
+          const rec = rq.result;
+          if (rec) {
+            if (code) rec.code = code;
+            if (count) rec.count = Math.max(0, Number(count) || 0);
+            if (prod) rec.prod = prod;
+            st.put(rec);
+          }
+        };
+        await done(tx);
+      } catch (e) { }
+      return { ok: true, id: dup.id, dup: true, name: dup.name };
+    }
 
     const id = 'a' + now.toString(36) + Math.random().toString(36).slice(2, 8);
     let finalName = name || 'don-hang.pdf';
