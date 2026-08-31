@@ -138,13 +138,17 @@ async function extractOrderInfo() {
       allText += t + '\n';
     }
     const found = [];
+    const orderIds = [];
     const CODE_CAP = 500;
     const push = s => {
       if (s && found.indexOf(s) === -1 && found.length < CODE_CAP) found.push(s);
     };
     let m;
     const orderIdRe = /order[\s_-]*id[:\s#]*([0-9]{8,25})/gi;
-    while ((m = orderIdRe.exec(allText)) && found.length < CODE_CAP) push(m[1]);
+    while ((m = orderIdRe.exec(allText)) && found.length < CODE_CAP) {
+      if (orderIds.indexOf(m[1]) === -1) orderIds.push(m[1]);
+      push(m[1]);
+    }
     const carrierRe = /\b(spx[a-z0-9]{6,25}|ghn\d{8,20}|ghtk\d{8,20}|jv\d{8,20}|jt\d{10,22})\b/gi;
     while ((m = carrierRe.exec(allText)) && found.length < CODE_CAP) push(m[1].toUpperCase());
     const digitRe = /\b([0-9]{12,22})\b/g;
@@ -190,7 +194,7 @@ async function extractOrderInfo() {
         }
       }
     } catch (e) { }
-    return { codes: found, prod, count };
+    return { codes: found, orderIds, prod, count };
   } catch (e) {
     return { codes: [], prod: '' };
   }
@@ -205,9 +209,10 @@ async function loadPdfDataUrl(dataUrl, name, srcUrl) {
       try { return await extractOrderInfo(); } finally { setBusy(null); }
     })();
     console.info('[PW] Lưu lịch sử:', name || docName, srcUrl || '(không có link)');
-    PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod, info.count)
+    PWArchive.save(dataUrl, name || docName, srcUrl || '', info.codes.join(' '), name || docName, info.prod, info.count, info.orderIds.join(' '))
       .then(r => {
-        if (r && r.ok && r.dup) toast('Đã có trong lịch sử: ' + (r.name || 'đơn') + ' — không lưu trùng.');
+        if (r && r.ok && r.subset) toast('Các đơn trong file này đã nằm trong lịch sử — không lưu lại.');
+        else if (r && r.ok && r.dup) toast('Đã có trong lịch sử: ' + (r.name || 'đơn') + ' — không lưu trùng.');
         else if (r && r.ok) toast('Đã lưu lịch sử: ' + (r.name || 'đơn'));
         else toast('Không lưu được lịch sử: ' + (r && r.error || 'lỗi không rõ'));
       })

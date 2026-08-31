@@ -116,7 +116,7 @@ const PWArchive = (() => {
     }
   }
 
-  async function save(data, name, url, code, origName, prod, count) {
+  async function save(data, name, url, code, origName, prod, count, orderIds) {
     if (!data || typeof data !== 'string' || data.indexOf('data:application/pdf') !== 0) {
       return { ok: false, error: 'Du lieu PDF khong hop le' };
     }
@@ -161,6 +161,25 @@ const PWArchive = (() => {
         await done(tx);
       } catch (e) { }
       return { ok: true, id: dup.id, dup: true, name: dup.name };
+    }
+
+    // File gộp từ các đơn đã in trước đó: nếu MỌI đơn trong file mới đều đã
+    // nằm trong lịch sử (cùng sàn) thì bỏ — không lưu, không đẩy Telegram.
+    if (prefix) {
+      const ids = String(orderIds || '').trim().split(/\s+/).filter(Boolean);
+      const testSet = ids.length ? ids : codes;
+      if (testSet.length) {
+        const universe = new Set();
+        for (const m of metas) {
+          if (m.prefix !== prefix) continue;
+          for (const t of String(m.code || '').split(/\s+/)) {
+            if (t) universe.add(t);
+          }
+        }
+        if (universe.size && testSet.every(c => universe.has(c))) {
+          return { ok: true, dup: true, subset: true, name: '' };
+        }
+      }
     }
 
     const id = 'a' + now.toString(36) + Math.random().toString(36).slice(2, 8);
