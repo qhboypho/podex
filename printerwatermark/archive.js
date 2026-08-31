@@ -175,6 +175,7 @@ const PWArchive = (() => {
     tx.objectStore(DATA).put({ id, data });
     await done(tx);
     maybeSweep();
+    tgUpload(meta, data);
     return { ok: true, id, name: meta.name };
   }
 
@@ -287,5 +288,86 @@ const PWArchive = (() => {
     } catch (e) { /* ignore */ }
   }
 
-  return { save, list, getFull, remove, clear, sweep, maybeSweep, importRecords };
+  // ---------- Telegram backup ----------
+  function tgCaption(meta) {
+    const lines = [
+      meta.name || 'don-hang.pdf',
+      meta.code ? ('Mã: ' + meta.code) : '',
+      meta.prod ? ('SP: ' + String(meta.prod).slice(0, 180)) : '',
+      meta.shop ? ('Sàn: ' + meta.shop) : '',
+      new Date(meta.savedAt).toLocaleString('vi-VN')
+    ].filter(Boolean);
+    return lines.join('\n').slice(0, 1000);
+  }
+
+  async function tgUpload(meta, dataUrl) {
+    try {
+      const { tg } = await chrome.storage.local.get({ tg: null });
+      if (!tg || !tg.enabled || !tg.botToken || !tg.chatId) return;
+      const blob = await (await fetch(dataUrl)).blob();
+      const fd = new FormData();
+      fd.append('chat_id', tg.chatId);
+      fd.append('caption', tgCaption(meta));
+      fd.append('document', blob, meta.name || 'don-hang.pdf');
+      const r = await fetch('https://api.telegram.org/bot' + tg.botToken + '/sendDocument', {
+        method: 'POST',
+        body: fd
+      });
+      const j = await r.json();
+      if (!j.ok) console.warn('[PW] Telegram backup thất bại:', j.description);
+    } catch (e) {
+      console.warn('[PW] Telegram backup lỗi:', e);
+    }
+  }
+
+  async function tgCall(token, method, body) {
+    const r = await fetch('https://api.telegram.org/bot' + token + '/' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return r.json();
+  }
+
+  async function tgTest(token, chatId) {
+    try {
+      const j = await tgCall(token, 'sendMessage', { chat_id: chatId, text: '✅ Kết nối OK — backup đơn hàng từ extension Watermark In Đơn Hàng.' });
+      return j.ok ? { ok: true } : { ok: false, error: j.description || 'lỗi Telegram' };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message || e) };
+    }
+  }
+
+  async function tgSetAutoDelete(days) {
+    try {
+      const { tg } = await chrome.storage.local.get({ tg: null });
+      if (!tg || !tg.botToken || !tg.chatId) return { ok: false, error: 'chưa cấu hình bot' };
+      const j = await tgCall(tg.botToken, 'setChatMessageAutoDeleteTime', {
+        chat_id: tg.chatId,
+        message_auto_delete_time: Math.max(3600, days * 86400)
+      });
+      return j.ok ? { ok: true } : { ok: false, error: j.description || 'lỗi Telegram' };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message || e) };
+    }
+  }
+
+  async function tgGetChatIds(token) {
+    try {
+      const j = await tgCall(token, 'getUpdates', {});
+      if (!j.ok) return { ok: false, error: j.description || 'lỗi Telegram' };
+      const map = {};
+      for (const u of (j.result || [])) {
+        const c = u.message && u.message.chat;
+        if (c && (c.type === 'group' || c.type === 'supergroup' || c.type === 'private')) {
+          map[c.id] = { id: String(c.id), title: c.title || c.username || c.first_name || String(c.id) };
+        }
+      }
+      return { ok: true, chats: Object.values(map) };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message || e) };
+    }
+  }
+
+  return { save, list, getFull, remove, clear, sweep, maybeSweep, importRecords, tgTest, tgSetAutoDelete, tgGetChatIds };
 })();

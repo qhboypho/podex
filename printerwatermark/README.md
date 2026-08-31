@@ -65,6 +65,12 @@ hàng xuất từ sàn TMĐT (TikTok Shop, Shopee, Lazada...) trước khi in, v
 - **Xuất backup / Nhập backup**: lưu toàn bộ lịch sử ra 1 file `.json` và khôi phục
   lại khi cần (đổi máy, đổi trình duyệt, lỡ xoá dữ liệu trang web) — nhập vào tự
   bỏ qua file trùng; file đã quá hạn TTL sẽ bị dọn tự động sau khi nhập.
+- **Backup Telegram (tuỳ chọn)**: cấu hình qua nút **Telegram** trên trang lịch sử —
+  mỗi file được lưu tự gửi lên một group Telegram riêng kèm caption (tên file, mã
+  vận đơn, tên SP); Telegram **tự xoá file sau thời gian lưu** (mặc định 30 ngày)
+  bằng auto-delete timer của group. Group phải private vì phiếu chứa thông tin khách;
+  bot token chỉ lưu trong máy. Tìm lại file: search caption trực tiếp trong app
+  Telegram (gõ mã vận đơn) → tải file → `+ Thêm PDF`.
 - In cùng một link trong 2 phút không lưu trùng bản (dedupe theo URL).
 
 ## Kiến trúc

@@ -177,6 +177,97 @@ button.mini { padding: 6px 10px; font-size: 12px; border-radius: 7px; }
   line-height: 1.6;
 }
 
+#tgModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+#tgModal .tg-box {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#tgModal h3 { margin: 0; font-size: 16px; }
+
+#tgModal .tg-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: #5f6368;
+  line-height: 1.6;
+}
+
+#tgModal .tg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+#tgModal input[type="text"],
+#tgModal input[type="password"] {
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#tgModal input:focus { border-color: #1a73e8; }
+
+#tgModal .tg-chatid {
+  display: flex;
+  gap: 8px;
+}
+
+#tgModal .tg-chatid button,
+#tgModal .tg-actions button {
+  border: 1px solid #1a73e8;
+  color: #1a73e8;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#tgModal .tg-chatid button:hover,
+#tgModal .tg-actions button:hover { background: #e8f0fe; }
+
+#tgModal .tg-actions button.primary {
+  background: #1a73e8;
+  color: #fff;
+}
+
+#tgModal .tg-actions button.primary:hover { background: #155ab6; }
+
+#tgModal .tg-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#tgModal .tg-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: #5f6368;
+  line-height: 1.6;
+}
+
 #toast {
   position: fixed;
   left: 50%;

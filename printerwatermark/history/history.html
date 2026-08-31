@@ -21,6 +21,7 @@
     </select>
     <input id="dayPick" type="date" class="hidden" title="Xem file của một ngày">
     <button id="addPdf" title="Thêm file PDF bất kỳ vào lịch sử">+ Thêm PDF</button>
+    <button id="tgConfig" title="Cấu hình backup lên Telegram">Telegram</button>
     <button id="refresh" title="Làm mới danh sách">Làm mới</button>
     <button id="exportBtn" title="Lưu toàn bộ lịch sử ra file backup .json">Xuất backup</button>
     <button id="importBtn" title="Khôi phục lịch sử từ file backup">Nhập backup</button>
@@ -29,6 +30,29 @@
   <input type="file" id="importInput" accept=".json,application/json" hidden>
   <main id="list"></main>
   <div id="pageError" class="hidden"></div>
+
+  <div id="tgModal" class="hidden">
+    <div class="tg-box">
+      <h3>Backup Telegram</h3>
+      <p class="tg-desc">Mỗi file được lưu sẽ tự gửi lên một group Telegram riêng làm bản backup, kèm caption (tên file, mã vận đơn, tên SP). Telegram tự xoá file sau thời gian lưu của lịch sử (mặc định 30 ngày).</p>
+      <label class="tg-row">
+        <input type="checkbox" id="tgEnabled">
+        <span>Bật backup tự động</span>
+      </label>
+      <input id="tgToken" type="password" placeholder="Bot token (tạo bot qua @BotFather)" autocomplete="off">
+      <div class="tg-chatid">
+        <input id="tgChatId" type="text" placeholder="Chat ID của group (vd -1001234567890)" autocomplete="off">
+        <button id="tgDetect" title="Gửi 1 tin nhắn bất kỳ trong group rồi bấm đây để dò Chat ID">Dò Chat ID</button>
+      </div>
+      <div class="tg-actions">
+        <button id="tgSave" class="primary">Lưu</button>
+        <button id="tgTest">Gửi tin test</button>
+        <button id="tgClose">Đóng</button>
+      </div>
+      <p class="tg-hint">Group phải để <b>private</b> (phiếu chứa tên/SĐT khách). Chỉ dùng bot riêng của mày, token giữ kín.</p>
+    </div>
+  </div>
+
   <div id="empty" class="hidden">
     <p><b>Chưa có đơn nào được lưu.</b></p>
     <p>Bấm <b>In đơn</b> trên sàn như bình thường — extension sẽ tự lưu bản PDF lại đây

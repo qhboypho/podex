@@ -320,6 +320,70 @@ async function importBackup(e) {
   }
 }
 
+async function openTgModal() {
+  try {
+    const { tg } = await chrome.storage.local.get({ tg: null });
+    $('#tgEnabled').checked = !!(tg && tg.enabled);
+    $('#tgToken').value = (tg && tg.botToken) || '';
+    $('#tgChatId').value = (tg && tg.chatId) || '';
+  } catch (e) { }
+  $('#tgModal').classList.remove('hidden');
+}
+
+async function saveTg() {
+  const botToken = $('#tgToken').value.trim();
+  const chatId = $('#tgChatId').value.trim();
+  const enabled = $('#tgEnabled').checked;
+  if (enabled && (!botToken || !chatId)) {
+    toastMsg('Cần đủ Bot token và Chat ID.');
+    return;
+  }
+  await chrome.storage.local.set({ tg: { enabled, botToken, chatId } });
+  if (enabled) {
+    const cfg = await chrome.storage.sync.get({ archiveDays: 30 });
+    const r = await PWArchive.tgSetAutoDelete(cfg.archiveDays);
+    if (r && r.ok) {
+      toastMsg('Đã lưu. Telegram sẽ tự xoá file sau ' + cfg.archiveDays + ' ngày.');
+      $('#tgModal').classList.add('hidden');
+    } else {
+      toastMsg('Đã lưu nhưng chưa set tự xoá: ' + (r && r.error || 'lỗi không rõ'));
+    }
+  } else {
+    toastMsg('Đã lưu cấu hình Telegram.');
+    $('#tgModal').classList.add('hidden');
+  }
+}
+
+async function testTg() {
+  const botToken = $('#tgToken').value.trim();
+  const chatId = $('#tgChatId').value.trim();
+  if (!botToken || !chatId) {
+    toastMsg('Nhập Bot token và Chat ID trước đã.');
+    return;
+  }
+  const r = await PWArchive.tgTest(botToken, chatId);
+  toastMsg(r && r.ok ? 'Kết nối OK — mở group Telegram kiểm tra tin nhắn.' : 'Lỗi: ' + (r && r.error || 'không rõ'));
+}
+
+async function detectTgChatId() {
+  const botToken = $('#tgToken').value.trim();
+  if (!botToken) {
+    toastMsg('Nhập Bot token trước đã.');
+    return;
+  }
+  const r = await PWArchive.tgGetChatIds(botToken);
+  if (!r || !r.ok) {
+    toastMsg('Lỗi: ' + (r && r.error || 'không rõ'));
+    return;
+  }
+  if (!r.chats.length) {
+    toastMsg('Chưa thấy chat nào — gửi 1 tin nhắn bất kỳ trong group rồi bấm Dò lại.');
+    return;
+  }
+  $('#tgChatId').value = r.chats[0].id;
+  toastMsg('Thấy ' + r.chats.length + ' chat: ' + r.chats.map(c => c.title + ' (' + c.id + ')').join(', ') + ' — đã điền chat đầu tiên.');
+}
+
 function wire() {
   $('#q').addEventListener('input', render);
   const range = $('#range');
@@ -339,6 +403,11 @@ function wire() {
   $('#exportBtn').onclick = exportBackup;
   $('#importBtn').onclick = () => { $('#importInput').value = ''; $('#importInput').click(); };
   $('#importInput').addEventListener('change', importBackup);
+  $('#tgConfig').onclick = openTgModal;
+  $('#tgClose').onclick = () => $('#tgModal').classList.add('hidden');
+  $('#tgSave').onclick = saveTg;
+  $('#tgTest').onclick = testTg;
+  $('#tgDetect').onclick = detectTgChatId;
   $('#clearAll').onclick = async () => {
     if (!all.length) return;
     if (!confirm('Xoá TOÀN BỘ ' + all.length + ' đơn đã lưu? Không thể hoàn tác.')) return;
