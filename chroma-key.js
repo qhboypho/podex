@@ -137,13 +137,17 @@
     else if (mode === 'black') { result = tryBlack(); used = 'black'; }
     else if (mode === 'white') { result = tryWhite(); used = 'white'; }
     else if (mode === 'color') { result = tryColor(); used = 'color'; }
-    else {
-      // auto: ưu tiên xanh (đặc trưng hơn), rồi đen, trắng, cuối cùng là bất kỳ
-      // màu nền đơn nào (xanh dương, đỏ, be…).
+    else if (mode === 'auto-all') {
+      // Dùng cho phôi nguồn: thử mọi loại nền, kể cả trắng và màu đơn tùy ý.
       result = tryGreen(); used = 'green';
       if (!result.changed) { result = tryBlack(); used = 'black'; }
       if (!result.changed) { result = tryWhite(); used = 'white'; }
       if (!result.changed) { result = tryColor(); used = 'color'; }
+    } else {
+      // auto (mặc định): xanh rồi đen — an toàn cho artwork vì hai loại nền này
+      // đặc trưng rõ; trắng/màu đơn có thể trùng với chính chủ thể (logo khối màu).
+      result = tryGreen(); used = 'green';
+      if (!result.changed) { result = tryBlack(); used = 'black'; }
     }
 
     if (!result.changed) return { blob: inputBlob, changed: false, mode: null };

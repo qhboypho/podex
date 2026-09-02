@@ -2199,6 +2199,12 @@
     fabricPreviewCtx.clearRect(0, 0, fabricPreviewCanvas.width, fabricPreviewCanvas.height);
     element.artworkImage.style.visibility = '';
     element.artworkOverlay.querySelector('.artwork-default').style.visibility = '';
+    for (const [, node] of _overlayNodes) {
+      const im = node.querySelector('.artwork-image');
+      const de = node.querySelector('.artwork-default');
+      if (im) im.style.visibility = '';
+      if (de) de.style.visibility = '';
+    }
   }
 
   function scheduleFabricPreview() {
@@ -2295,10 +2301,11 @@
 
   async function runFabricPreview() {
     fabricPreviewPending = false;
-    const overlay = Core.getActiveOverlay(scene);
-    const artworkSrc = overlay?.artwork?.src;
-
-    if (!artworkSrc || overlay.hidden || scene.base.kind === 'default') { clearFabricPreview(); return; }
+    // Vẽ TẤT CẢ overlay của mặt đang chọn (không chỉ lớp active): mỗi lớp đều
+    // có warp vải và áp mask cọ riêng — khi chọn/bỏ chọn lớp khác, phần đã cọ
+    // xoá không bao giờ "hồi phục" vì lớp đó vẫn nằm trên canvas.
+    const overlays = Core.getOverlays(scene).filter(ov => ov.artwork?.src && !ov.hidden);
+    if (!overlays.length || scene.base.kind === 'default') { clearFabricPreview(); return; }
 
     ensureFabricPreviewCanvas();
 
@@ -2323,7 +2330,7 @@
     }
 
     try {
-      const [baseImg, artImg] = await Promise.all([loadImage(scene.base.src), loadImage(artworkSrc)]);
+      const baseImg = await loadImage(scene.base.src);
       if (abortId !== fabricPreviewAbort) return;
 
       // ── 1. Draw garment to offscreen canvas at display size
@@ -2339,99 +2346,8 @@
       }
       const { dx, dy, lum, gradMag } = garmentDispCache.dispMap;
 
-      // ── 3. Compute artwork placement in display coords
-      const overlaySize = W * 0.205 * overlay.scale;
-      const artH = overlaySize * artImg.naturalHeight / artImg.naturalWidth;
-      const cx = W * overlay.x / 100;
-      const cy = H * overlay.y / 100;
-      const angle = overlay.rotation * Math.PI / 180;
-      const cosA = Math.cos(angle), sinA = Math.sin(angle);
-
-      // Bounding box of artwork in display coords
-      const halfW = Math.abs(cosA * overlaySize / 2) + Math.abs(sinA * artH / 2) + 2;
-      const halfH2 = Math.abs(sinA * overlaySize / 2) + Math.abs(cosA * artH / 2) + 2;
-      const artX = Math.round(cx - halfW);
-      const artY = Math.round(cy - halfH2);
-      const bW = Math.round(halfW * 2);
-      const bH = Math.round(halfH2 * 2);
-
-      // ── 4. Rasterise artwork into a small canvas at exact bounding box
-      const artCanvas = document.createElement('canvas');
-      artCanvas.width = bW; artCanvas.height = bH;
-      const artCtx = artCanvas.getContext('2d', { willReadFrequently: true });
-      artCtx.save();
-      artCtx.translate(bW / 2, bH / 2);
-      artCtx.rotate(angle);
-      artCtx.drawImage(artImg, -overlaySize / 2, -artH / 2, overlaySize, artH);
-      artCtx.restore();
-
-      // ── 5. Displacement + fold-aware emboss per pixel
-      const artData = artCtx.getImageData(0, 0, bW, bH);
-      const srcD = new Uint8ClampedArray(artData.data); // copy source
-      const dstD = artData.data;
-      const strength = blendParams.dispStrength;
-      const emboss = blendParams.emboss;
-
-      for (let py = 0; py < bH; py++) {
-        for (let px = 0; px < bW; px++) {
-          const gx = artX + px;
-          const gy = artY + py;
-          const dIdx = (py * bW + px) * 4;
-
-          if (gx < 0 || gx >= W || gy < 0 || gy >= H) continue;
-          const gIdx = gy * W + gx;
-
-          // ── Displacement: warp source sample by fabric gradient
-          // Giới hạn biên độ 10px: vùng gradient gắt (tóc, đường may) không
-          // xé artwork thành vạch, nếp gấp mềm vẫn giữ được độ cong.
-          const dispX = dx[gIdx] * strength;
-          const dispY = dy[gIdx] * strength;
-          const dispMag = Math.hypot(dispX, dispY);
-          const dispScale = dispMag > 10 ? 10 / dispMag : 1;
-          const offX = Math.round(dispX * dispScale);
-          const offY = Math.round(dispY * dispScale);
-          const sx = Math.max(0, Math.min(bW - 1, px - offX));
-          const sy = Math.max(0, Math.min(bH - 1, py - offY));
-          const sIdx = (sy * bW + sx) * 4;
-
-          dstD[dIdx]   = srcD[sIdx];
-          dstD[dIdx+1] = srcD[sIdx+1];
-          dstD[dIdx+2] = srcD[sIdx+2];
-          dstD[dIdx+3] = srcD[sIdx+3];
-
-          if (dstD[dIdx+3] < 4) continue; // transparent pixel — skip
-
-          // ── Fold intensity at this pixel (0 = flat fabric, 1 = deep fold)
-          const fold = gradMag[gIdx]; // 0..1
-
-          // ── Emboss: darken/lighten ONLY proportional to fold depth
-          // At fold=0 (flat), factor=1 → no change.
-          // At fold=1 (deep fold), factor varies with lum.
-          if (emboss > 0 && fold > 0.01) {
-            const gLum = lum[gIdx];
-            // deviation from mid-grey, weighted by fold depth
-            const deviation = (gLum - 0.5) * fold * emboss * 1.4;
-            const factor = 1 + deviation;
-            dstD[dIdx]   = Math.min(255, Math.max(0, dstD[dIdx]   * factor));
-            dstD[dIdx+1] = Math.min(255, Math.max(0, dstD[dIdx+1] * factor));
-            dstD[dIdx+2] = Math.min(255, Math.max(0, dstD[dIdx+2] * factor));
-            // Also fade alpha at deep dark folds (artwork dips into crease)
-            if (gLum < 0.35) {
-              const fadeAmount = (0.35 - gLum) / 0.35 * fold * emboss;
-              dstD[dIdx+3] = Math.round(dstD[dIdx+3] * (1 - fadeAmount * 0.7));
-            }
-          }
-        }
-      }
-      artCtx.putImageData(artData, 0, 0);
-
-      // ── 6. Overlay color tint
-      if (blendParams.overlayColor !== 'none') {
-        artCtx.globalCompositeOperation = 'multiply';
-        artCtx.fillStyle = blendParams.overlayColor;
-        artCtx.fillRect(0, 0, bW, bH);
-        artCtx.globalCompositeOperation = 'source-over';
-      }
+      const ctx = fabricPreviewCtx;
+      ctx.clearRect(0, 0, W, H);
 
       // ── 6a. Restore pending mask from saved workspace (once, first preview after restore)
       if (pendingMaskBlob) {
@@ -2441,70 +2357,169 @@
         if (abortId !== fabricPreviewAbort) return;
       }
 
-      // ── 6b. Apply brush mask into artCanvas alpha
-      if (maskCanvas && maskCanvas.width > 0) {
-        // Ensure mask matches current artboard size (handles window resize between sessions)
-        if (maskCanvas.width !== W || maskCanvas.height !== H) {
-          ensureMaskCanvas(W, H);
-        }
-        const artImg = artCtx.getImageData(0, 0, bW, bH);
-        const ad = artImg.data;
-        const maskImg = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-        const md = maskImg.data;
-        const mW = maskCanvas.width, mH = maskCanvas.height;
+      const strength = blendParams.dispStrength;
+      const emboss = blendParams.emboss;
+
+      for (const overlay of overlays) {
+        const artImg = await loadImage(overlay.artwork.src);
+        if (abortId !== fabricPreviewAbort) return;
+
+        // ── 3. Compute artwork placement in display coords
+        const overlaySize = W * 0.205 * overlay.scale;
+        const artH = overlaySize * artImg.naturalHeight / artImg.naturalWidth;
+        const cx = W * overlay.x / 100;
+        const cy = H * overlay.y / 100;
+        const angle = overlay.rotation * Math.PI / 180;
+        const cosA = Math.cos(angle), sinA = Math.sin(angle);
+
+        // Bounding box of artwork in display coords
+        const halfW = Math.abs(cosA * overlaySize / 2) + Math.abs(sinA * artH / 2) + 2;
+        const halfH2 = Math.abs(sinA * overlaySize / 2) + Math.abs(cosA * artH / 2) + 2;
+        const artX = Math.round(cx - halfW);
+        const artY = Math.round(cy - halfH2);
+        const bW = Math.round(halfW * 2);
+        const bH = Math.round(halfH2 * 2);
+
+        // ── 4. Rasterise artwork into a small canvas at exact bounding box
+        const artCanvas = document.createElement('canvas');
+        artCanvas.width = bW; artCanvas.height = bH;
+        const artCtx = artCanvas.getContext('2d', { willReadFrequently: true });
+        artCtx.save();
+        artCtx.translate(bW / 2, bH / 2);
+        artCtx.rotate(angle);
+        artCtx.drawImage(artImg, -overlaySize / 2, -artH / 2, overlaySize, artH);
+        artCtx.restore();
+
+        // ── 5. Displacement + fold-aware emboss per pixel
+        const artData = artCtx.getImageData(0, 0, bW, bH);
+        const srcD = new Uint8ClampedArray(artData.data); // copy source
+        const dstD = artData.data;
+
         for (let py = 0; py < bH; py++) {
           for (let px = 0; px < bW; px++) {
-            const dispX = Math.round(artX + px);
-            const dispY = Math.round(artY + py);
-            if (dispX < 0 || dispX >= mW || dispY < 0 || dispY >= mH) continue;
-            const maskAlpha = md[(dispY * mW + dispX) * 4 + 3];
-            if (maskAlpha < 255) {
-              const ai = (py * bW + px) * 4;
-              ad[ai + 3] = Math.round(ad[ai + 3] * maskAlpha / 255);
+            const gx = artX + px;
+            const gy = artY + py;
+            const dIdx = (py * bW + px) * 4;
+
+            if (gx < 0 || gx >= W || gy < 0 || gy >= H) continue;
+            const gIdx = gy * W + gx;
+
+            // ── Displacement: warp source sample by fabric gradient
+            // Giới hạn biên độ 10px: vùng gradient gắt (tóc, đường may) không
+            // xé artwork thành vạch, nếp gấp mềm vẫn giữ được độ cong.
+            const dispX = dx[gIdx] * strength;
+            const dispY = dy[gIdx] * strength;
+            const dispMag = Math.hypot(dispX, dispY);
+            const dispScale = dispMag > 10 ? 10 / dispMag : 1;
+            const offX = Math.round(dispX * dispScale);
+            const offY = Math.round(dispY * dispScale);
+            const sx = Math.max(0, Math.min(bW - 1, px - offX));
+            const sy = Math.max(0, Math.min(bH - 1, py - offY));
+            const sIdx = (sy * bW + sx) * 4;
+
+            dstD[dIdx]   = srcD[sIdx];
+            dstD[dIdx+1] = srcD[sIdx+1];
+            dstD[dIdx+2] = srcD[sIdx+2];
+            dstD[dIdx+3] = srcD[sIdx+3];
+
+            if (dstD[dIdx+3] < 4) continue; // transparent pixel — skip
+
+            // ── Fold intensity at this pixel (0 = flat fabric, 1 = deep fold)
+            const fold = gradMag[gIdx]; // 0..1
+
+            // ── Emboss: darken/lighten ONLY proportional to fold depth
+            if (emboss > 0 && fold > 0.01) {
+              const gLum = lum[gIdx];
+              const deviation = (gLum - 0.5) * fold * emboss * 1.4;
+              const factor = 1 + deviation;
+              dstD[dIdx]   = Math.min(255, Math.max(0, dstD[dIdx]   * factor));
+              dstD[dIdx+1] = Math.min(255, Math.max(0, dstD[dIdx+1] * factor));
+              dstD[dIdx+2] = Math.min(255, Math.max(0, dstD[dIdx+2] * factor));
+              // Also fade alpha at deep dark folds (artwork dips into crease)
+              if (gLum < 0.35) {
+                const fadeAmount = (0.35 - gLum) / 0.35 * fold * emboss;
+                dstD[dIdx+3] = Math.round(dstD[dIdx+3] * (1 - fadeAmount * 0.7));
+              }
             }
           }
         }
-        artCtx.putImageData(artImg, 0, 0);
-      }
+        artCtx.putImageData(artData, 0, 0);
 
-      // ── 7. Composite artwork onto preview canvas with blend mode + filter
-      const ctx = fabricPreviewCtx;
-      ctx.clearRect(0, 0, W, H);
-      ctx.save();
-      if (blendParams.blurRadius > 0) {
-        ctx.filter = `blur(${blendParams.blurRadius}px) contrast(${blendParams.contrast}%)`;
-      } else if (blendParams.contrast !== 100) {
-        ctx.filter = `contrast(${blendParams.contrast}%)`;
-      }
-      ctx.globalAlpha = blendParams.opacity;
-      ctx.globalCompositeOperation = blendParams.mode;
-      ctx.drawImage(artCanvas, artX, artY, bW, bH);
-      ctx.restore();
+        // ── 6. Overlay color tint
+        if (blendParams.overlayColor !== 'none') {
+          artCtx.globalCompositeOperation = 'multiply';
+          artCtx.fillStyle = blendParams.overlayColor;
+          artCtx.fillRect(0, 0, bW, bH);
+          artCtx.globalCompositeOperation = 'source-over';
+        }
 
-      // ── 8. Edge blend (radial vignette softens artwork edges into fabric)
-      if (blendParams.edgeBlend > 0.05) {
-        const vCtx = artCtx;
-        const vCanvas = document.createElement('canvas');
-        vCanvas.width = bW; vCanvas.height = bH;
-        const vc = vCanvas.getContext('2d');
-        const grd = vc.createRadialGradient(
-          bW/2, bH/2, Math.min(bW,bH)*0.3,
-          bW/2, bH/2, Math.max(bW,bH)*0.7
-        );
-        grd.addColorStop(0, 'rgba(0,0,0,0)');
-        grd.addColorStop(1, `rgba(0,0,0,${blendParams.edgeBlend * 0.6})`);
-        vc.fillStyle = grd;
-        vc.fillRect(0, 0, bW, bH);
+        // ── 6b. Apply brush mask into artCanvas alpha (mọi overlay đều áp mask)
+        if (maskCanvas && maskCanvas.width > 0) {
+          if (maskCanvas.width !== W || maskCanvas.height !== H) {
+            ensureMaskCanvas(W, H);
+          }
+          const masked = artCtx.getImageData(0, 0, bW, bH);
+          const ad = masked.data;
+          const maskImg = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+          const md = maskImg.data;
+          const mW = maskCanvas.width, mH = maskCanvas.height;
+          for (let py = 0; py < bH; py++) {
+            for (let px = 0; px < bW; px++) {
+              const dispX = Math.round(artX + px);
+              const dispY = Math.round(artY + py);
+              if (dispX < 0 || dispX >= mW || dispY < 0 || dispY >= mH) continue;
+              const maskAlpha = md[(dispY * mW + dispX) * 4 + 3];
+              if (maskAlpha < 255) {
+                const ai = (py * bW + px) * 4;
+                ad[ai + 3] = Math.round(ad[ai + 3] * maskAlpha / 255);
+              }
+            }
+          }
+          artCtx.putImageData(masked, 0, 0);
+        }
+
+        // ── 7. Composite artwork onto preview canvas with blend mode + filter
         ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.globalAlpha = 0.7;
-        ctx.drawImage(vCanvas, artX, artY, bW, bH);
+        if (blendParams.blurRadius > 0) {
+          ctx.filter = `blur(${blendParams.blurRadius}px) contrast(${blendParams.contrast}%)`;
+        } else if (blendParams.contrast !== 100) {
+          ctx.filter = `contrast(${blendParams.contrast}%)`;
+        }
+        ctx.globalAlpha = blendParams.opacity;
+        ctx.globalCompositeOperation = blendParams.mode;
+        ctx.drawImage(artCanvas, artX, artY, bW, bH);
         ctx.restore();
+
+        // ── 8. Edge blend (radial vignette softens artwork edges into fabric)
+        if (blendParams.edgeBlend > 0.05) {
+          const vCanvas = document.createElement('canvas');
+          vCanvas.width = bW; vCanvas.height = bH;
+          const vc = vCanvas.getContext('2d');
+          const grd = vc.createRadialGradient(
+            bW/2, bH/2, Math.min(bW,bH)*0.3,
+            bW/2, bH/2, Math.max(bW,bH)*0.7
+          );
+          grd.addColorStop(0, 'rgba(0,0,0,0)');
+          grd.addColorStop(1, `rgba(0,0,0,${blendParams.edgeBlend * 0.6})`);
+          vc.fillStyle = grd;
+          vc.fillRect(0, 0, bW, bH);
+          ctx.save();
+          ctx.globalCompositeOperation = 'multiply';
+          ctx.globalAlpha = 0.7;
+          ctx.drawImage(vCanvas, artX, artY, bW, bH);
+          ctx.restore();
+        }
       }
 
-      // ── 9. Hide CSS artwork layer, show canvas result
+      // ── 9. Hide ALL CSS artwork layers, show canvas result
       element.artworkImage.style.visibility = 'hidden';
       element.artworkOverlay.querySelector('.artwork-default').style.visibility = 'hidden';
+      for (const [, node] of _overlayNodes) {
+        const im = node.querySelector('.artwork-image');
+        const de = node.querySelector('.artwork-default');
+        if (im) im.style.visibility = 'hidden';
+        if (de) de.style.visibility = 'hidden';
+      }
 
     } catch {
       clearFabricPreview();
@@ -3620,7 +3635,7 @@
 
   // ─── Khử nền cho PHÔI NGUỒN (xanh/đen/trắng/tự động 1 màu) ────────────────
   // Giữ nguyên vị trí, kích thước, vùng in đã chỉnh — chỉ thay pixel ảnh.
-  const BASE_CHROMA_LABEL = { green: 'xanh lá', black: 'đen', white: 'trắng', color: 'màu nền' };
+  const BASE_CHROMA_LABEL = { green: 'xanh lá', black: 'đen', white: 'trắng', color: 'màu nền', 'auto-all': 'màu nền' };
   let baseChromaBusy = false;
 
   async function applyBaseChromaKey(mode) {
@@ -3683,7 +3698,7 @@
     element.baseChromaWhite.addEventListener('click', () => applyBaseChromaKey('white'));
   }
   if (element.baseChromaAuto) {
-    element.baseChromaAuto.addEventListener('click', () => applyBaseChromaKey('auto'));
+    element.baseChromaAuto.addEventListener('click', () => applyBaseChromaKey('auto-all'));
   }
 
   // ─── Text & icon panel ────────────────────────────────────────────────────
