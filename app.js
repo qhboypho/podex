@@ -37,6 +37,11 @@
     backgroundMessage: $('#backgroundMessage'),
     baseFile: $('#baseFile'),
     baseFileTrigger: $('#baseFileTrigger'),
+    baseChromaGreen: $('#baseChromaGreen'),
+    baseChromaBlack: $('#baseChromaBlack'),
+    baseChromaWhite: $('#baseChromaWhite'),
+    baseChromaAuto: $('#baseChromaAuto'),
+    baseChromaMessage: $('#baseChromaMessage'),
     baseImage: $('#baseImage'),
     baseLayerName: $('#baseLayerName'),
     baseMessage: $('#baseMessage'),
@@ -2235,8 +2240,22 @@
     const d = idata.data;
     const size = W * H;
     const lum = new Float32Array(size);
+    const coverage = new Float32Array(size);
+    // Phôi nền trong suốt: luminance của pixel rỗng là vô nghĩa — thay bằng
+    // luminance trung bình của vùng đục để không tạo gradient giả ở rìa.
+    // Chỉ bật khi ảnh thật sự có pixel trong suốt (ảnh chụp luôn opaque).
+    let transparentN = 0, opaqueSum = 0, opaqueN = 0;
     for (let i = 0; i < size; i++) {
+      const a = d[i * 4 + 3];
       lum[i] = (0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]) / 255;
+      if (a < 8) transparentN += 1;
+      if (a > 16) { opaqueSum += lum[i]; opaqueN += 1; }
+    }
+    const hasTransparency = transparentN > 0;
+    const meanLum = opaqueN ? opaqueSum / opaqueN : 0.5;
+    for (let i = 0; i < size; i++) {
+      coverage[i] = hasTransparency ? d[i * 4 + 3] / 255 : 1;
+      if (hasTransparency && coverage[i] < 0.06) lum[i] = meanLum;
     }
     // Làm mờ luminance trước khi tính Sobel: vệt tóc/nét gắt trên ảnh phôi
     // không còn xé artwork thành những vạch cắt lởm chởm.
@@ -2247,6 +2266,13 @@
     for (let y = 1; y < H - 1; y++) {
       for (let x = 1; x < W - 1; x++) {
         const idx = y * W + x;
+        // Vùng trong suốt (ngoài silhouet phôi): gradient = 0, không shade.
+        if (coverage[idx] < 0.5
+          || coverage[idx - 1] < 0.5 || coverage[idx + 1] < 0.5
+          || coverage[idx - W] < 0.5 || coverage[idx + W] < 0.5) {
+          gradMag[idx] = 0;
+          continue;
+        }
         const gx = (
           -smooth[(y-1)*W+(x-1)] + smooth[(y-1)*W+(x+1)]
           -2*smooth[y*W+(x-1)]   + 2*smooth[y*W+(x+1)]
@@ -3590,6 +3616,74 @@
   }
   if (element.artworkChromaBlack) {
     element.artworkChromaBlack.addEventListener('click', () => applyChromaKeyToActive('black'));
+  }
+
+  // ─── Khử nền cho PHÔI NGUỒN (xanh/đen/trắng/tự động 1 màu) ────────────────
+  // Giữ nguyên vị trí, kích thước, vùng in đã chỉnh — chỉ thay pixel ảnh.
+  const BASE_CHROMA_LABEL = { green: 'xanh lá', black: 'đen', white: 'trắng', color: 'màu nền' };
+  let baseChromaBusy = false;
+
+  async function applyBaseChromaKey(mode) {
+    const target = element.baseChromaMessage;
+    if (baseChromaBusy) return;
+    const asset = fileBlobs.base;
+    if (!asset?.blob) {
+      setMessage(target, 'Tải phôi lên trước khi khử nền.', 'error');
+      return;
+    }
+    if (!ChromaKey?.processBlob) {
+      setMessage(target, 'Trình duyệt không hỗ trợ khử nền.', 'error');
+      return;
+    }
+    baseChromaBusy = true;
+    const buttons = [element.baseChromaGreen, element.baseChromaBlack, element.baseChromaWhite, element.baseChromaAuto];
+    buttons.forEach((button) => { if (button) button.disabled = true; });
+    setMessage(target, `Đang khử nền ${BASE_CHROMA_LABEL[mode] || mode}…`);
+    try {
+      const { blob, changed, mode: used } = await ChromaKey.processBlob(asset.blob, {
+        mode,
+        force: mode !== 'auto',
+      });
+      if (!changed) {
+        const hint = mode === 'auto'
+          ? 'Không phát hiện nền màu đồng nhất quanh phôi.'
+          : `Viền phôi không phải nền ${BASE_CHROMA_LABEL[mode]}. Hãy thử chế độ khác.`;
+        setMessage(target, hint, 'error');
+        return;
+      }
+      const newSrc = URL.createObjectURL(blob);
+      const newName = (asset.name || 'phoi').replace(/\.[^/.]+$/, '') + `-nensuot.png`;
+      const oldSrc = scene.base.src;
+      // Cập nhật trực tiếp src phôi — giữ nguyên baseTransform và safeArea.
+      scene = { ...scene, base: { ...scene.base, src: newSrc, name: newName } };
+      revokeLater(fileUrls.base);
+      fileUrls.base = newSrc;
+      fileBlobs.base = { blob, name: newName, metadata: asset.metadata };
+      garmentDispCache = null;
+      if (oldSrc) _imageCache.delete(oldSrc);
+      markDirty();
+      render();
+      const usedLabel = BASE_CHROMA_LABEL[used] || used;
+      setMessage(target, `Đã khử nền ${usedLabel} cho phôi. Vị trí và vùng in giữ nguyên.`, 'success');
+      showToast(`Đã khử nền ${usedLabel} cho phôi nguồn.`);
+    } catch {
+      setMessage(target, 'Không thể khử nền cho ảnh này.', 'error');
+    } finally {
+      baseChromaBusy = false;
+      buttons.forEach((button) => { if (button) button.disabled = false; });
+    }
+  }
+  if (element.baseChromaGreen) {
+    element.baseChromaGreen.addEventListener('click', () => applyBaseChromaKey('green'));
+  }
+  if (element.baseChromaBlack) {
+    element.baseChromaBlack.addEventListener('click', () => applyBaseChromaKey('black'));
+  }
+  if (element.baseChromaWhite) {
+    element.baseChromaWhite.addEventListener('click', () => applyBaseChromaKey('white'));
+  }
+  if (element.baseChromaAuto) {
+    element.baseChromaAuto.addEventListener('click', () => applyBaseChromaKey('auto'));
   }
 
   // ─── Text & icon panel ────────────────────────────────────────────────────

@@ -24,19 +24,50 @@
     return output;
   }
 
+  // Độ đục chuẩn hóa của một pixel (0..1).
+  function alpha01(pixels, index) {
+    return pixels[index * 4 + 3] / 255;
+  }
+
   function buildFoldField(fabricPixels, width, height, strength = 1) {
     const size = width * height;
     const luminance = new Float32Array(size);
+    const coverage = new Float32Array(size);
     const dx = new Float32Array(size);
     const dy = new Float32Array(size);
     const shade = new Float32Array(size);
-    for (let index = 0; index < size; index += 1) luminance[index] = luminanceAt(fabricPixels, index * 4);
+    // Phôi nền trong suốt: luminance vùng rỗng vô nghĩa — thay bằng luminance
+    // trung bình của vùng đục để mép silhouet không sinh gradient giả. Chỉ bật
+    // khi ảnh thật sự có pixel trong suốt (ảnh chụp/JPEG luôn opaque toàn phần).
+    let transparentN = 0, opaqueSum = 0, opaqueN = 0;
+    for (let index = 0; index < size; index += 1) {
+      const alpha = fabricPixels[index * 4 + 3];
+      luminance[index] = luminanceAt(fabricPixels, index * 4);
+      if (alpha < 8) transparentN += 1;
+      if (alpha > 16) { opaqueSum += luminance[index]; opaqueN += 1; }
+    }
+    const hasTransparency = transparentN > 0;
+    const meanLum = opaqueN ? opaqueSum / opaqueN : 0.5;
+    for (let index = 0; index < size; index += 1) {
+      coverage[index] = hasTransparency ? alpha01(fabricPixels, index) : 1;
+      if (hasTransparency && coverage[index] < 0.06) luminance[index] = meanLum;
+    }
     const radius = clamp(Math.round(Math.min(width, height) / 90), 1, 12);
     const smooth = blurLuminance(luminance, width, height, radius);
     const sample = (field, x, y) => field[clamp(y, 0, height - 1) * width + clamp(x, 0, width - 1)];
+    const sampleCoverage = (x, y) => coverage[clamp(y, 0, height - 1) * width + clamp(x, 0, width - 1)];
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const index = y * width + x;
+        if (coverage[index] < 0.5
+          || sampleCoverage(x - 1, y) < 0.5 || sampleCoverage(x + 1, y) < 0.5
+          || sampleCoverage(x, y - 1) < 0.5 || sampleCoverage(x, y + 1) < 0.5) {
+          // Ngoài silhouet phôi: không dịch chuyển, không đổ bóng.
+          dx[index] = 0;
+          dy[index] = 0;
+          shade[index] = 1;
+          continue;
+        }
         const detail = luminance[index] - smooth[index];
         const trough = Math.max(0, -detail);
         const ridge = Math.max(0, detail);

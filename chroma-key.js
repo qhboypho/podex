@@ -90,7 +90,8 @@
 
   // Xử lý một Blob/File ảnh → trả về { blob, changed, mode }. Nếu không phát hiện
   // nền cần khử, changed=false và blob là ảnh gốc (không đụng vào).
-  // options.mode: 'green' | 'black' | 'auto' (mặc định 'auto' — thử xanh rồi đen).
+  // options.mode: 'green' | 'black' | 'white' | 'color' | 'auto' (mặc định 'auto'
+  // — thử xanh rồi đen, trắng, cuối cùng là bất kỳ màu nền đơn nào).
   // options.force = true: bỏ qua ngưỡng phát hiện, ép khử theo màu nền ước lượng.
   async function processBlob(inputBlob, options = {}) {
     const bitmap = await createImageBitmap(inputBlob);
@@ -118,14 +119,31 @@
         : options;
       return removeBlackScreen(imageData, opts);
     };
+    const tryWhite = () => {
+      const opts = options.force
+        ? { ...options, forceWhite: { bgLuma: estimateWhiteLuma(data, width, height) } }
+        : options;
+      return removeWhiteScreen(imageData, opts);
+    };
+    const tryColor = () => {
+      const opts = options.force
+        ? { ...options, forceColor: estimateColorKey(data, width, height) }
+        : options;
+      return removeColorScreen(imageData, opts);
+    };
 
     let result = { changed: false }, used = null;
     if (mode === 'green') { result = tryGreen(); used = 'green'; }
     else if (mode === 'black') { result = tryBlack(); used = 'black'; }
+    else if (mode === 'white') { result = tryWhite(); used = 'white'; }
+    else if (mode === 'color') { result = tryColor(); used = 'color'; }
     else {
-      // auto: ưu tiên xanh (đặc trưng hơn), nếu không có thì thử đen.
+      // auto: ưu tiên xanh (đặc trưng hơn), rồi đen, trắng, cuối cùng là bất kỳ
+      // màu nền đơn nào (xanh dương, đỏ, be…).
       result = tryGreen(); used = 'green';
       if (!result.changed) { result = tryBlack(); used = 'black'; }
+      if (!result.changed) { result = tryWhite(); used = 'white'; }
+      if (!result.changed) { result = tryColor(); used = 'color'; }
     }
 
     if (!result.changed) return { blob: inputBlob, changed: false, mode: null };
@@ -218,8 +236,168 @@
     return n ? Math.min(sum / n, minL + 10) : 10;
   }
 
+  // ─── Khử nền TRẮNG ────────────────────────────────────────────────────────
+  // Kiểm tra viền có phải nền trắng/sáng đồng nhất không. Trả về { isWhite, bgLuma }.
+  // Dùng MEDIAN luma của các pixel sáng ở viền: chủ thể sạm chạm mép không kéo
+  // lệch giá trị nền như trung bình.
+  function detectWhiteBackground(data, width, height) {
+    const step = Math.max(1, Math.round(Math.min(width, height) / 96));
+    let bright = 0, total = 0;
+    const brightLumas = [];
+    const acc = (x, y) => {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 8) return;
+      total += 1;
+      const l = luma(data[i], data[i + 1], data[i + 2]);
+      // "Sáng": luma cao và không lệch màu mạnh (trắng/xám sáng, không phải vàng nhạt).
+      const maxC = Math.max(data[i], data[i + 1], data[i + 2]);
+      const minC = Math.min(data[i], data[i + 1], data[i + 2]);
+      if (l > 205 && maxC - minC < 40) { bright += 1; brightLumas.push(l); }
+    };
+    for (let d = 0; d < 3; d += 1) {
+      for (let x = 0; x < width; x += step) { acc(x, d); acc(x, height - 1 - d); }
+      for (let y = 0; y < height; y += step) { acc(d, y); acc(width - 1 - d, y); }
+    }
+    if (!total || bright / total < 0.4 || !brightLumas.length) return { isWhite: false };
+    brightLumas.sort((a, b) => a - b);
+    const bgLuma = brightLumas[Math.floor(brightLumas.length / 2)];
+    return { isWhite: true, bgLuma };
+  }
+
+  // Khử nền trắng: alpha mềm theo luma (ngược chiều với khử đen).
+  function removeWhiteScreen(imageData, options = {}) {
+    const { data, width, height } = imageData;
+    const bg = options.forceWhite ? { isWhite: true, bgLuma: options.forceWhite.bgLuma }
+      : detectWhiteBackground(data, width, height);
+    if (!bg.isWhite) return { changed: false };
+
+    // Nền càng sáng, ngưỡng càng sát mép trắng để giữ lại chi tiết sáng của chủ thể.
+    const base = Math.min(bg.bgLuma, 250);
+    const high = clamp(base - (options.highOffset ?? 8), 120, 252); // từ mức này → trong suốt
+    const low = clamp(base - (options.lowOffset ?? 42), 40, high - 10); // dưới mức này → giữ hẳn
+
+    for (let i = 0; i < data.length; i += 4) {
+      const l = luma(data[i], data[i + 1], data[i + 2]);
+      let alphaMul;
+      if (l >= high) alphaMul = 0;
+      else if (l <= low) alphaMul = 1;
+      else alphaMul = (high - l) / (high - low);
+
+      if (alphaMul <= 0) { data[i + 3] = 0; continue; }
+      data[i + 3] = Math.round(data[i + 3] * alphaMul);
+    }
+    return { changed: true };
+  }
+
+  // Ước lượng độ sáng nền trắng từ viền (cho khử trắng thủ công) — dùng P90
+  // của luma viền để chủ thể chạm mép không kéo giá trị xuống.
+  function estimateWhiteLuma(data, width, height) {
+    const step = Math.max(1, Math.round(Math.min(width, height) / 96));
+    const lumas = [];
+    const acc = (x, y) => {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 8) return;
+      lumas.push(luma(data[i], data[i + 1], data[i + 2]));
+    };
+    for (let x = 0; x < width; x += step) { acc(x, 0); acc(x, height - 1); }
+    for (let y = 0; y < height; y += step) { acc(0, y); acc(width - 1, y); }
+    if (!lumas.length) return 245;
+    lumas.sort((a, b) => a - b);
+    return lumas[Math.min(lumas.length - 1, Math.floor(lumas.length * 0.9))];
+  }
+
+  // ─── Khử nền MÀU ĐƠN TÙY Ý (xanh dương, đỏ, bất kỳ màu đồng nhất) ─────────
+  // Khoảng cách màu Euclid rút gọn (bình phương) giữa 2 pixel.
+  function colorDist2(r1, g1, b1, r2, g2, b2) {
+    const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+    return dr * dr + dg * dg + db * db;
+  }
+
+  // Phân tích viền: nếu đa số pixel gần một màu trung bình (nền đồng nhất) thì
+  // trả về màu key. Trả về { uniform, keyR, keyG, keyB, spread }.
+  function detectColorBackground(data, width, height) {
+    const step = Math.max(1, Math.round(Math.min(width, height) / 96));
+    const samples = [];
+    const push = (x, y) => {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 8) return;
+      samples.push([data[i], data[i + 1], data[i + 2]]);
+    };
+    for (let d = 0; d < 3; d += 1) {
+      for (let x = 0; x < width; x += step) { push(x, d); push(x, height - 1 - d); }
+      for (let y = 0; y < height; y += step) { push(d, y); push(width - 1 - d, y); }
+    }
+    if (samples.length < 16) return { uniform: false };
+
+    let sumR = 0, sumG = 0, sumB = 0;
+    for (const [r, g, b] of samples) { sumR += r; sumG += g; sumB += b; }
+    const keyR = sumR / samples.length, keyG = sumG / samples.length, keyB = sumB / samples.length;
+
+    // Độ phân tán: khoảng cách màu trung bình tới màu key.
+    let spreadSum = 0;
+    for (const [r, g, b] of samples) spreadSum += Math.sqrt(colorDist2(r, g, b, keyR, keyG, keyB));
+    const spread = spreadSum / samples.length;
+    // Nền đồng nhất: phân tán nhỏ. Nới ngưỡng khi màu nền rất đậm hoặc rất sáng
+    // (ảnh JPEG thường nhiễu hơn trên nền trung tính).
+    const l = luma(keyR, keyG, keyB);
+    const tolerance = l < 60 || l > 210 ? 46 : 34;
+    if (spread > tolerance) return { uniform: false };
+    return { uniform: true, keyR, keyG, keyB, spread };
+  }
+
+  // Khử nền màu đơn: alpha mềm theo khoảng cách màu tới key, có feather.
+  function removeColorScreen(imageData, options = {}) {
+    const { data, width, height } = imageData;
+    const key = options.forceColor || null;
+    let keyR, keyG, keyB, spread;
+    if (key) {
+      keyR = key.keyR; keyG = key.keyG; keyB = key.keyB; spread = key.spread ?? 30;
+    } else {
+      const bg = detectColorBackground(data, width, height);
+      if (!bg.uniform) return { changed: false };
+      keyR = bg.keyR; keyG = bg.keyG; keyB = bg.keyB; spread = bg.spread;
+    }
+
+    // Ngưỡng khoảng cách màu: dưới low → trong suốt, trên high → giữ hẳn.
+    const low = clamp(Math.max(spread * 1.6, options.lowDist ?? 42), 20, 160);
+    const high = clamp(low + (options.feather ?? 55), low + 10, 220);
+    const low2 = low * low, high2 = high * high;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const d2 = colorDist2(data[i], data[i + 1], data[i + 2], keyR, keyG, keyB);
+      let alphaMul;
+      if (d2 <= low2) alphaMul = 0;
+      else if (d2 >= high2) alphaMul = 1;
+      else alphaMul = (Math.sqrt(d2) - low) / (high - low);
+
+      if (alphaMul <= 0) { data[i + 3] = 0; continue; }
+      data[i + 3] = Math.round(data[i + 3] * alphaMul);
+    }
+    return { changed: true };
+  }
+
+  // Ước lượng màu nền đồng nhất từ viền (cho khử màu thủ công/ép buộc).
+  function estimateColorKey(data, width, height) {
+    const bg = detectColorBackground(data, width, height);
+    if (bg.uniform) return { keyR: bg.keyR, keyG: bg.keyG, keyB: bg.keyB, spread: bg.spread };
+    // Không đồng nhất vẫn ước lượng màu trung bình viền (ep buộc theo yêu cầu người dùng).
+    const step = Math.max(1, Math.round(Math.min(width, height) / 96));
+    let sumR = 0, sumG = 0, sumB = 0, n = 0;
+    const acc = (x, y) => {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 8) return;
+      sumR += data[i]; sumG += data[i + 1]; sumB += data[i + 2]; n += 1;
+    };
+    for (let x = 0; x < width; x += step) { acc(x, 0); acc(x, height - 1); }
+    for (let y = 0; y < height; y += step) { acc(0, y); acc(width - 1, y); }
+    if (!n) return { keyR: 255, keyG: 255, keyB: 255, spread: 30 };
+    return { keyR: sumR / n, keyG: sumG / n, keyB: sumB / n, spread: 40 };
+  }
+
   globalThis.FormChromaKey = {
     detectBackground, removeGreenScreen, processBlob, greenExcess, estimateGreenKey,
     detectBlackBackground, removeBlackScreen, estimateBlackLuma,
+    detectWhiteBackground, removeWhiteScreen, estimateWhiteLuma,
+    detectColorBackground, removeColorScreen, estimateColorKey, colorDist2,
   };
 })();
