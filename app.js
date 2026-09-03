@@ -500,15 +500,26 @@
     restoreHistorySnapshot(redoStack.pop());
   }
 
-    // Test hook: soi nội dung mask từng overlay.
+  // Test hook: soi nội dung mask từng overlay.
   if (typeof window !== 'undefined') {
     window.__maskDebug = () => {
       const out = [];
       for (const [overlayId, entry] of overlayMasks) {
         const d = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height).data;
-        let transparent = 0;
-        for (let i = 3; i < d.length; i += 4) { if (d[i] < 250) transparent += 1; }
-        out.push({ overlayId, size: entry.canvas.width + 'x' + entry.canvas.height, transparentPx: transparent });
+        let erased = 0, minX = Infinity, maxX = -1, minY = Infinity, maxY = -1;
+        for (let y = 0; y < entry.canvas.height; y++) {
+          for (let x = 0; x < entry.canvas.width; x++) {
+            const a = d[(y * entry.canvas.width + x) * 4 + 3];
+            if (a < 250) {
+              erased += 1;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        out.push({ overlayId, size: entry.canvas.width + 'x' + entry.canvas.height, erasedPx: erased, bbox: erased > 0 ? [minX, minY, maxX, maxY] : null });
       }
       return out;
     };
@@ -2366,11 +2377,13 @@
 
   async function runFabricPreview() {
     fabricPreviewPending = false;
+    if (typeof window !== 'undefined') window.__previewRuns = (window.__previewRuns || 0) + 1;
+    window.__previewTrail = (window.__previewTrail || []); window.__previewTrail.push('run' + window.__previewRuns);
     // Vẽ TẤT CẢ overlay của mặt đang chọn (không chỉ lớp active): mỗi lớp đều
     // có warp vải và áp mask cọ riêng — khi chọn/bỏ chọn lớp khác, phần đã cọ
     // xoá không bao giờ "hồi phục" vì lớp đó vẫn nằm trên canvas.
     const overlays = Core.getOverlays(scene).filter(ov => ov.artwork?.src && !ov.hidden);
-    if (!overlays.length || scene.base.kind === 'default') { clearFabricPreview(); return; }
+    if (!overlays.length || scene.base.kind === 'default') { window.__previewTrail.push('early:' + overlays.length + ':' + scene.base.kind); clearFabricPreview(); return; }
 
     ensureFabricPreviewCanvas();
 
@@ -2378,7 +2391,7 @@
     const artboard = element.artboard;
     const W = artboard.clientWidth;
     const H = artboard.clientHeight;
-    if (W < 2 || H < 2) return;
+    if (W < 2 || H < 2) { if (window.__logPreview) console.log('[preview] early: W/H'); return; }
 
     // Always sync canvas pixel buffer to artboard display size.
     // Skipping the !== check matters: after a window resize or initial
@@ -2396,6 +2409,7 @@
 
     try {
       const baseImg = await loadImage(scene.base.src);
+      if (window.__logPreview) console.log('[preview] base loaded');
       if (abortId !== fabricPreviewAbort) return;
 
       // ── 1. Draw garment to offscreen canvas at display size
@@ -2432,6 +2446,7 @@
 
       for (const overlay of overlays) {
         const artImg = await loadImage(overlay.artwork.src);
+        if (window.__logPreview) console.log('[preview] art loaded', overlay.id);
         if (abortId !== fabricPreviewAbort) return;
 
         // ── 3. Compute artwork placement in display coords
@@ -2451,8 +2466,7 @@
         const bH = Math.round(halfH2 * 2);
 
         // ── 4. Rasterise artwork into a small canvas at exact bounding box
-        // Mask cọ áp NGAY TRONG không gian đã xoay (destination-in) để vết xoá
-        // bám theo artwork khi di chuyển/xoay/thay đổi kích thước.
+        // (Mask cọ áp SAU bước warp/tint — xem 6b — vì putImageData sẽ ghi đè.)
         const artCanvas = document.createElement('canvas');
         artCanvas.width = bW; artCanvas.height = bH;
         const artCtx = artCanvas.getContext('2d', { willReadFrequently: true });
@@ -2460,12 +2474,6 @@
         artCtx.translate(bW / 2, bH / 2);
         artCtx.rotate(angle);
         artCtx.drawImage(artImg, -overlaySize / 2, -artH / 2, overlaySize, artH);
-        const overlayMask = getExistingOverlayMask(overlay.id);
-        if (overlayMask) {
-          artCtx.globalCompositeOperation = 'destination-in';
-          artCtx.drawImage(overlayMask.canvas, -overlaySize / 2, -artH / 2, overlaySize, artH);
-          artCtx.globalCompositeOperation = 'source-over';
-        }
         artCtx.restore();
 
         // ── 5. Displacement + fold-aware emboss per pixel
@@ -2531,7 +2539,18 @@
           artCtx.globalCompositeOperation = 'source-over';
         }
 
-        // ── 6b. (mask đã áp trong bước 4 — destination-in trong không gian xoay)
+        // ── 6b. Apply THIS overlay's brush mask — mask theo hệ local ảnh, áp
+        // destination-in trong không gian đã xoay của artwork (sau warp/tint vì
+        // putImageData ở bước 5 ghi đè toàn bộ nội dung canvas).
+        const overlayMask = getExistingOverlayMask(overlay.id);
+        if (overlayMask) {
+          artCtx.save();
+          artCtx.translate(bW / 2, bH / 2);
+          artCtx.rotate(angle);
+          artCtx.globalCompositeOperation = 'destination-in';
+          artCtx.drawImage(overlayMask.canvas, -overlaySize / 2, -artH / 2, overlaySize, artH);
+          artCtx.restore();
+        }
 
         // ── 7. Composite artwork onto preview canvas with blend mode + filter
         ctx.save();
@@ -2565,6 +2584,8 @@
           ctx.restore();
         }
       }
+
+      if (window.__logPreview) console.log('[preview] drew ' + overlays.length + ' overlays');
 
       // ── 9. Hide ALL CSS artwork layers, show canvas result
       element.artworkImage.style.visibility = 'hidden';
@@ -4857,9 +4878,9 @@
           x: (event.clientX - rect.left) * (element.artboard.clientWidth / rect.width),
           y: (event.clientY - rect.top) * (element.artboard.clientHeight / rect.height),
         };
-        const localNow = brushCtx.toLocal(mc.x, mc.y);
-        paintStroke(brushLastX, brushLastY, localNow.x, localNow.y);
-        brushLastX = localNow.x; brushLastY = localNow.y;
+        // Luôn truyền toạ độ artboard — paintBrushAt tự chuyển sang local.
+        paintStroke(brushLastX, brushLastY, mc.x, mc.y);
+        brushLastX = mc.x; brushLastY = mc.y;
       }
     });
 
@@ -4901,8 +4922,7 @@
         x: (event.clientX - rect.left) * (W / rect.width),
         y: (event.clientY - rect.top) * (H / rect.height),
       };
-      const localFirst = brushCtx.toLocal(mc.x, mc.y);
-      brushLastX = localFirst.x; brushLastY = localFirst.y;
+      brushLastX = mc.x; brushLastY = mc.y;
       paintBrushAt(mc.x, mc.y);
       updateMaskOverlay();
       scheduleFabricPreview();
