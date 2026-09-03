@@ -967,7 +967,7 @@
   }
 
   async function workspaceRecord() {
-    const maskBlob = await getMaskBlob();
+    const maskAssets = await getMaskBlobs();
     return {
       version: 2,
       savedAt: Date.now(),
@@ -981,7 +981,7 @@
         logo: fileBlobs.logo,
       },
       artworkAssets: { ...artworkBlobs },
-      mask: maskBlob,
+      maskAssets,
     };
   }
 
@@ -1121,8 +1121,12 @@
       stampDraft(`ĐÃ KHÔI PHỤC ${time}`);
       render();
       // Defer mask restore: runFabricPreview will pick it up once artboard is sized
-      if (stored.mask) {
-        pendingMaskBlob = stored.mask;
+      if (stored.maskAssets) {
+        pendingMaskAssets = stored.maskAssets;
+      } else if (stored.mask) {
+        // Draft cũ (mask toàn cục): gán cho overlay đầu tiên của mặt đang xem.
+        const firstWithArt = Core.getOverlays(scene).find((ov) => ov.artwork?.src);
+        if (firstWithArt) pendingMaskAssets = { [firstWithArt.id]: stored.mask };
       }
       setStatus('Đã khôi phục bản lưu tại máy');
       showToast('Đã khôi phục workspace cục bộ. Phôi vẫn được khóa.');
@@ -2053,33 +2057,82 @@
   let garmentDispCache = null; // { src, dispMap: {dx,dy,lum,W,H} }
 
   // ─── Mask canvas ──────────────────────────────────────────────────────────
-  // Stores brush strokes as alpha: white=fully visible, black/transparent=erased.
-  // Separate from fabricPreviewCanvas — never cleared by runFabricPreview.
-  // maskOverlayCanvas: red tint showing erased areas when brush is active.
+  // MỖI overlay có một mask riêng (trắng = hiển thị hết, xoá = tạo lỗ) — vết cọ
+  // của một lớp không bao giờ đè lên lớp khác khi bật/tắt ẩn hiện.
 
-  let maskCanvas = null;
-  let maskCtx = null;
+  const overlayMasks = new Map(); // overlayId → { canvas, ctx }
 
-  // ── Undo/redo stacks (each entry is an ImageData snapshot of maskCanvas)
+  function alphaAllWhite(data) {
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] !== 255) return false;
+    }
+    return true;
+  }
+
+  // Tạo/nạp mask của overlay, resize giữ nguyên nội dung khi artboard đổi kích thước.
+  function ensureOverlayMask(overlayId, W, H) {
+    let entry = overlayMasks.get(overlayId);
+    if (!entry) {
+      const canvas = document.createElement('canvas');
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, W, H);
+      entry = { canvas, ctx };
+      overlayMasks.set(overlayId, entry);
+      return entry;
+    }
+    if (entry.canvas.width !== W || entry.canvas.height !== H) {
+      const tmp = document.createElement('canvas');
+      tmp.width = entry.canvas.width; tmp.height = entry.canvas.height;
+      tmp.getContext('2d').drawImage(entry.canvas, 0, 0);
+      entry.canvas.width = W;
+      entry.canvas.height = H;
+      entry.ctx.fillStyle = '#fff';
+      entry.ctx.fillRect(0, 0, W, H);
+      entry.ctx.globalCompositeOperation = 'copy';
+      entry.ctx.drawImage(tmp, 0, 0, W, H);
+      entry.ctx.globalCompositeOperation = 'source-over';
+    }
+    return entry;
+  }
+
+  // Lấy mask nếu đã tồn tại (chưa vẽ gì → không cần áp).
+  function getExistingOverlayMask(overlayId) {
+    return overlayMasks.get(overlayId) || null;
+  }
+
+  function deleteOverlayMask(overlayId) {
+    overlayMasks.delete(overlayId);
+  }
+
+  function clearAllOverlayMasks() {
+    overlayMasks.clear();
+  }
+
+  // ── Undo/redo stacks (mỗi entry: { overlayId, ImageData } của mask lớp đó)
   const maskUndoStack = [];
   const maskRedoStack = [];
   const MASK_UNDO_LIMIT = 30;
 
-  function saveMaskSnapshot() {
-    if (!maskCtx) return;
-    const snap = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-    maskUndoStack.push(snap);
+  function saveMaskSnapshot(overlayId) {
+    const entry = overlayMasks.get(overlayId);
+    if (!entry) return;
+    maskUndoStack.push({ overlayId, snap: entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height) });
     if (maskUndoStack.length > MASK_UNDO_LIMIT) maskUndoStack.shift();
     maskRedoStack.length = 0; // clear redo on new stroke
     updateUndoRedoUI();
   }
 
   function undoMask() {
-    if (maskUndoStack.length === 0 || !maskCtx) return;
-    // Save current state to redo
-    maskRedoStack.push(maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height));
-    const snap = maskUndoStack.pop();
-    maskCtx.putImageData(snap, 0, 0);
+    if (maskUndoStack.length === 0) return;
+    const step = maskUndoStack.pop();
+    const entry = overlayMasks.get(step.overlayId);
+    if (!entry) { updateUndoRedoUI(); return; }
+    // Lưu trạng thái hiện tại vào redo
+    maskRedoStack.push({ overlayId: step.overlayId, snap: entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height) });
+    entry.ctx.putImageData(step.snap, 0, 0);
     updateMaskOverlay();
     scheduleFabricPreview();
     updateUndoRedoUI();
@@ -2087,10 +2140,12 @@
   }
 
   function redoMask() {
-    if (maskRedoStack.length === 0 || !maskCtx) return;
-    maskUndoStack.push(maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height));
-    const snap = maskRedoStack.pop();
-    maskCtx.putImageData(snap, 0, 0);
+    if (maskRedoStack.length === 0) return;
+    const step = maskRedoStack.pop();
+    const entry = overlayMasks.get(step.overlayId);
+    if (!entry) { updateUndoRedoUI(); return; }
+    maskUndoStack.push({ overlayId: step.overlayId, snap: entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height) });
+    entry.ctx.putImageData(step.snap, 0, 0);
     updateMaskOverlay();
     scheduleFabricPreview();
     updateUndoRedoUI();
@@ -2102,71 +2157,45 @@
     if (element.brushRedo) element.brushRedo.disabled = maskRedoStack.length === 0;
   }
 
-  function ensureMaskCanvas(W, H) {
-    if (!maskCanvas) {
-      maskCanvas = document.createElement('canvas');
-      maskCanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5;display:none';
-      element.artboard.appendChild(maskCanvas);
-      maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
-      maskCanvas.width = W;
-      maskCanvas.height = H;
-      maskCtx.fillStyle = '#fff';
-      maskCtx.fillRect(0, 0, W, H);
-    } else if (maskCanvas.width !== W || maskCanvas.height !== H) {
-      // Resize: scale existing mask to new dimensions preserving alpha channel.
-      // 1. Snapshot old mask at its current size
-      const tmp = document.createElement('canvas');
-      tmp.width = maskCanvas.width; tmp.height = maskCanvas.height;
-      tmp.getContext('2d').drawImage(maskCanvas, 0, 0);
-      // 2. Resize mask canvas (clears to transparent)
-      maskCanvas.width = W;
-      maskCanvas.height = H;
-      // 3. Fill with opaque white (pristine = show everything)
-      maskCtx.fillStyle = '#fff';
-      maskCtx.fillRect(0, 0, W, H);
-      // 4. Draw old mask onto new canvas using 'copy' composite so alpha is
-      //    transferred exactly, not blended with the white background
-      maskCtx.globalCompositeOperation = 'copy';
-      maskCtx.drawImage(tmp, 0, 0, W, H);
-      maskCtx.globalCompositeOperation = 'source-over';
-    }
-  }
-
   function updateMaskOverlay() { /* removed — no overlay canvas */ }
   function showMaskOverlay() { /* removed */ }
 
+  // Reset mask của overlay đang chọn về trắng (hiển thị toàn bộ).
   function resetMask() {
-    if (!maskCanvas) return;
-    maskCtx.fillStyle = '#fff';
-    maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    const overlay = Core.getActiveOverlay(scene);
+    if (!overlay) return;
+    const entry = overlayMasks.get(overlay.id);
+    if (!entry) return;
+    entry.ctx.fillStyle = '#fff';
+    entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
     scheduleFabricPreview();
   }
 
+  // Đổi phôi → mọi mask vị trí vô nghĩa.
   function destroyMask() {
-    if (maskCanvas) { maskCanvas.remove(); maskCanvas = null; maskCtx = null; }
+    clearAllOverlayMasks();
   }
 
-  // ── Pending mask blob: set during workspace restore, consumed by runFabricPreview
-  let pendingMaskBlob = null;
+  // ── Pending mask assets: set during workspace restore, consumed by runFabricPreview
+  let pendingMaskAssets = null;
 
-  // ── Export mask as PNG blob for persistence
-  function getMaskBlob() {
-    if (!maskCanvas || !maskCtx) return Promise.resolve(null);
-    // Check if mask is pristine (all white = no strokes) — skip saving
-    const data = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height).data;
-    let pristine = true;
-    for (let i = 3; i < data.length; i += 4) {
-      if (data[i] !== 255) { pristine = false; break; }
+  // ── Export per-overlay masks as PNG blobs for persistence
+  async function getMaskBlobs() {
+    const out = {};
+    for (const [overlayId, entry] of overlayMasks) {
+      // Bỏ qua mask còn nguyên (toàn trắng) — không có nét cọ nào.
+      const data = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height).data;
+      if (alphaAllWhite(data)) continue;
+      out[overlayId] = await new Promise((resolve) => {
+        entry.canvas.toBlob((blob) => resolve(blob), 'image/png');
+      });
     }
-    if (pristine) return Promise.resolve(null);
-    return new Promise(resolve => {
-      maskCanvas.toBlob(blob => resolve(blob), 'image/png');
-    });
+    return out;
   }
 
-  // ── Restore mask from a saved PNG blob
-  async function restoreMaskFromBlob(blob, width, height, { skipSchedule = false } = {}) {
-    if (!blob) return;
+  // ── Restore one overlay's mask from a saved PNG blob
+  async function restoreMaskFromBlob(overlayId, blob, width, height, { skipSchedule = false } = {}) {
+    if (!blob || !overlayId) return;
     const url = URL.createObjectURL(blob);
     try {
       const img = await new Promise((resolve, reject) => {
@@ -2175,11 +2204,11 @@
         i.onerror = reject;
         i.src = url;
       });
-      ensureMaskCanvas(width || img.naturalWidth, height || img.naturalHeight);
+      const entry = ensureOverlayMask(overlayId, width || img.naturalWidth, height || img.naturalHeight);
       // Use 'copy' composite to replace mask content exactly, preserving alpha
-      maskCtx.globalCompositeOperation = 'copy';
-      maskCtx.drawImage(img, 0, 0, maskCanvas.width, maskCanvas.height);
-      maskCtx.globalCompositeOperation = 'source-over';
+      entry.ctx.globalCompositeOperation = 'copy';
+      entry.ctx.drawImage(img, 0, 0, entry.canvas.width, entry.canvas.height);
+      entry.ctx.globalCompositeOperation = 'source-over';
       if (!skipSchedule) scheduleFabricPreview();
     } finally {
       URL.revokeObjectURL(url);
@@ -2349,12 +2378,17 @@
       const ctx = fabricPreviewCtx;
       ctx.clearRect(0, 0, W, H);
 
-      // ── 6a. Restore pending mask from saved workspace (once, first preview after restore)
-      if (pendingMaskBlob) {
-        const blob = pendingMaskBlob;
-        pendingMaskBlob = null;
-        await restoreMaskFromBlob(blob, W, H, { skipSchedule: true });
-        if (abortId !== fabricPreviewAbort) return;
+      // ── 6a. Restore pending per-overlay masks from saved workspace (once)
+      if (pendingMaskAssets) {
+        const assets = pendingMaskAssets;
+        pendingMaskAssets = null;
+        for (const [overlayId, blob] of Object.entries(assets)) {
+          if (!blob) continue;
+          // Bỏ qua mask của overlay không còn tồn tại trong scene.
+          if (!Core.getOverlayById(scene, Number(overlayId))) continue;
+          await restoreMaskFromBlob(Number(overlayId), blob, W, H, { skipSchedule: true });
+          if (abortId !== fabricPreviewAbort) return;
+        }
       }
 
       const strength = blendParams.dispStrength;
@@ -2453,30 +2487,28 @@
           artCtx.globalCompositeOperation = 'source-over';
         }
 
-        // ── 6b. Apply brush mask into artCanvas alpha (mọi overlay đều áp mask)
-        if (maskCanvas && maskCanvas.width > 0) {
-          if (maskCanvas.width !== W || maskCanvas.height !== H) {
-            ensureMaskCanvas(W, H);
-          }
-          const masked = artCtx.getImageData(0, 0, bW, bH);
-          const ad = masked.data;
-          const maskImg = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-          const md = maskImg.data;
-          const mW = maskCanvas.width, mH = maskCanvas.height;
-          for (let py = 0; py < bH; py++) {
-            for (let px = 0; px < bW; px++) {
-              const dispX = Math.round(artX + px);
-              const dispY = Math.round(artY + py);
-              if (dispX < 0 || dispX >= mW || dispY < 0 || dispY >= mH) continue;
-              const maskAlpha = md[(dispY * mW + dispX) * 4 + 3];
-              if (maskAlpha < 255) {
-                const ai = (py * bW + px) * 4;
-                ad[ai + 3] = Math.round(ad[ai + 3] * maskAlpha / 255);
-              }
+      // ── 6b. Apply THIS overlay's brush mask into artCanvas alpha
+      const overlayMask = getExistingOverlayMask(overlay.id);
+      if (overlayMask && overlayMask.canvas.width > 0) {
+        const mW = overlayMask.canvas.width, mH = overlayMask.canvas.height;
+        const masked = artCtx.getImageData(0, 0, bW, bH);
+        const ad = masked.data;
+        const maskImg = overlayMask.ctx.getImageData(0, 0, mW, mH);
+        const md = maskImg.data;
+        for (let py = 0; py < bH; py++) {
+          for (let px = 0; px < bW; px++) {
+            const dispX = Math.round(artX + px);
+            const dispY = Math.round(artY + py);
+            if (dispX < 0 || dispX >= mW || dispY < 0 || dispY >= mH) continue;
+            const maskAlpha = md[(dispY * mW + dispX) * 4 + 3];
+            if (maskAlpha < 255) {
+              const ai = (py * bW + px) * 4;
+              ad[ai + 3] = Math.round(ad[ai + 3] * maskAlpha / 255);
             }
           }
-          artCtx.putImageData(masked, 0, 0);
         }
+        artCtx.putImageData(masked, 0, 0);
+      }
 
         // ── 7. Composite artwork onto preview canvas with blend mode + filter
         ctx.save();
@@ -4709,31 +4741,37 @@
   }
 
   // ── Paint one brush stamp into the mask at (x, y)
+  // Overlay đang cọ — thiết lập khi pointerdown, dùng cho mọi nét vẽ trong phiên.
+  let brushTargetOverlayId = null;
+
   function paintBrushAt(x, y) {
-    if (!maskCtx || !maskCanvas) return;
+    if (!brushTargetOverlayId) return;
+    const entry = overlayMasks.get(brushTargetOverlayId);
+    if (!entry) return;
+    const targetCtx = entry.ctx;
     const r = Math.max(1, brushState.size);
     const innerR = r * Math.min(0.99, brushState.hardness);
     const alpha = brushState.opacity;
 
-    maskCtx.save();
+    targetCtx.save();
     if (brushState.mode === 'restore') {
-      maskCtx.globalCompositeOperation = 'source-over';
-      const grd = maskCtx.createRadialGradient(x, y, innerR, x, y, r);
+      targetCtx.globalCompositeOperation = 'source-over';
+      const grd = targetCtx.createRadialGradient(x, y, innerR, x, y, r);
       grd.addColorStop(0, `rgba(255,255,255,${alpha})`);
       grd.addColorStop(1, 'rgba(255,255,255,0)');
-      maskCtx.fillStyle = grd;
+      targetCtx.fillStyle = grd;
     } else {
       // erase or blur — remove alpha from mask so artwork becomes transparent there
-      maskCtx.globalCompositeOperation = 'destination-out';
-      const grd = maskCtx.createRadialGradient(x, y, innerR, x, y, r);
+      targetCtx.globalCompositeOperation = 'destination-out';
+      const grd = targetCtx.createRadialGradient(x, y, innerR, x, y, r);
       grd.addColorStop(0, `rgba(0,0,0,${alpha})`);
       grd.addColorStop(1, 'rgba(0,0,0,0)');
-      maskCtx.fillStyle = grd;
+      targetCtx.fillStyle = grd;
     }
-    maskCtx.beginPath();
-    maskCtx.arc(x, y, r, 0, Math.PI * 2);
-    maskCtx.fill();
-    maskCtx.restore();
+    targetCtx.beginPath();
+    targetCtx.arc(x, y, r, 0, Math.PI * 2);
+    targetCtx.fill();
+    targetCtx.restore();
   }
 
   // ── Interpolated stroke: fill gaps between pointer samples
@@ -4781,25 +4819,33 @@
         drawCursorPreview(x, y);
       }
 
-      if (brushPainting && maskCanvas) {
-        const mc = toCanvasCoords(event, maskCanvas);
-        paintStroke(brushLastX, brushLastY, mc.x, mc.y);
-        brushLastX = mc.x; brushLastY = mc.y;
+      if (brushPainting && brushTargetOverlayId) {
+        const entry = overlayMasks.get(brushTargetOverlayId);
+        if (entry) {
+          const mc = toCanvasCoords(event, entry.canvas);
+          paintStroke(brushLastX, brushLastY, mc.x, mc.y);
+          brushLastX = mc.x; brushLastY = mc.y;
+        }
       }
     });
 
     element.artboard.addEventListener('pointerdown', (event) => {
       if (!brushState.active || event.button !== 0) return;
-      // Create mask at artboard display size — independent of fabricPreviewCanvas
+      // Cọ áp cho overlay đang chọn — mỗi lớp một mask riêng.
+      const overlay = Core.getActiveOverlay(scene);
+      if (!overlay?.artwork?.src) {
+        showToast('Chọn một artwork để cọ xoá / làm mờ.');
+        return;
+      }
       const W = element.artboard.clientWidth;
       const H = element.artboard.clientHeight;
       if (W < 2 || H < 2) return;
-      ensureMaskCanvas(W, H);
-      if (!maskCanvas) return;
+      const mask = ensureOverlayMask(overlay.id, W, H);
+      brushTargetOverlayId = overlay.id;
       brushPainting = true;
       element.artboard.setPointerCapture(event.pointerId);
-      saveMaskSnapshot(); // save before stroke for undo
-      const mc = toCanvasCoords(event, maskCanvas);
+      saveMaskSnapshot(overlay.id); // save before stroke for undo
+      const mc = toCanvasCoords(event, mask.canvas);
       brushLastX = mc.x; brushLastY = mc.y;
       paintBrushAt(mc.x, mc.y);
       updateMaskOverlay();
@@ -4811,6 +4857,7 @@
     const stopBrush = (event) => {
       if (!brushPainting) return;
       brushPainting = false;
+      brushTargetOverlayId = null;
       if (element.artboard.hasPointerCapture(event.pointerId)) element.artboard.releasePointerCapture(event.pointerId);
       markDirty(); // persist mask changes via auto-save
     };
@@ -4829,10 +4876,6 @@
       ensureCursorCanvas();
       cursorCanvas.width  = element.artboard.clientWidth;
       cursorCanvas.height = element.artboard.clientHeight;
-      // Pre-create mask so overlay is available immediately
-      if (fabricPreviewCanvas && fabricPreviewCanvas.width > 0) {
-        ensureMaskCanvas(fabricPreviewCanvas.width, fabricPreviewCanvas.height);
-      }
     }
     setBrushActive(nowActive);
   });
@@ -4842,9 +4885,6 @@
     ensureCursorCanvas();
     cursorCanvas.width  = element.artboard.clientWidth;
     cursorCanvas.height = element.artboard.clientHeight;
-    if (fabricPreviewCanvas && fabricPreviewCanvas.width > 0) {
-      ensureMaskCanvas(fabricPreviewCanvas.width, fabricPreviewCanvas.height);
-    }
     setBrushActive(true);
   }
 
@@ -4874,11 +4914,12 @@
     saveSettings();
   });
   element.brushResetMask.addEventListener('click', () => {
-    if (maskCtx) saveMaskSnapshot();
+    const overlay = Core.getActiveOverlay(scene);
+    if (overlay) saveMaskSnapshot(overlay.id);
     resetMask();
     markDirty(); // persist cleared mask via auto-save
-    setStatus('Đã xoá toàn bộ mask');
-    showToast('Đã xoá mask — artwork hiển thị đầy đủ.');
+    setStatus('Đã xoá mask của artwork đang chọn');
+    showToast('Đã xoá mask — artwork đang chọn hiển thị đầy đủ.');
   });
   element.brushUndo.addEventListener('click', undoMask);
   element.brushRedo.addEventListener('click', redoMask);
