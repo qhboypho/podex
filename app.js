@@ -519,7 +519,7 @@
             }
           }
         }
-        out.push({ overlayId, size: entry.canvas.width + 'x' + entry.canvas.height, erasedPx: erased, bbox: erased > 0 ? [minX, minY, maxX, maxY] : null });
+        out.push({ overlayId, size: entry.canvas.width + 'x' + entry.canvas.height, erasedPx: erased, bbox: erased > 0 ? [minX, minY, maxX, maxY] : null, center: erased > 0 ? [Math.round((minX + maxX) / 2), Math.round((minY + maxY) / 2)] : null });
       }
       return out;
     };
@@ -4896,8 +4896,9 @@
       const H = element.artboard.clientHeight;
       if (W < 2 || H < 2) return;
       const drawW = W * 0.205 * overlay.scale; // bề rộng artwork hiển thị (px)
-      const maskSize = overlayMaskSize(overlay);
       const imgW = Number(overlay.artwork?.metadata?.width) || 400;
+      const imgH = Number(overlay.artwork?.metadata?.height) || Math.round(imgW / 1.19);
+      const maskSize = overlayMaskSize(overlay);
       const cos = Math.cos(-overlay.rotation * Math.PI / 180);
       const sin = Math.sin(-overlay.rotation * Math.PI / 180);
       const cx = W * overlay.x / 100;
@@ -4909,7 +4910,8 @@
           const dy = py - cy;
           const lx0 = dx * cos - dy * sin;
           const ly0 = dx * sin + dy * cos;
-          return { x: lx0 / drawW * imgW, y: ly0 / drawW * imgW };
+          // Hệ local của ảnh: tâm artwork = tâm ảnh → cộng nửa kích thước.
+          return { x: lx0 / drawW * imgW + imgW / 2, y: ly0 / drawW * imgH + imgH / 2 };
         },
       };
       const mask = ensureOverlayMask(overlay.id, maskSize.w, maskSize.h);
