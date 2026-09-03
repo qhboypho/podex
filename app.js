@@ -2040,6 +2040,20 @@
       artworkContext.restore();
     }
 
+    // Apply THIS overlay's eraser mask — scale từ kích thước preview lên export
+    // (destination-in nhân alpha: vùng đã cọ xoá cũng bị xoá trên ảnh xuất).
+    const overlayMask = getExistingOverlayMask(overlay.id);
+    if (overlayMask && overlayMask.canvas.width > 0) {
+      const maskScaled = document.createElement('canvas');
+      maskScaled.width = width;
+      maskScaled.height = height;
+      maskScaled.getContext('2d').drawImage(overlayMask.canvas, 0, 0, width, height);
+      artworkContext.save();
+      artworkContext.globalCompositeOperation = 'destination-in';
+      artworkContext.drawImage(maskScaled, 0, 0);
+      artworkContext.restore();
+    }
+
     context.save();
     context.globalCompositeOperation = 'source-over';
     context.drawImage(artworkLayer, 0, 0);
