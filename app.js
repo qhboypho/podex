@@ -1262,7 +1262,7 @@
     replaceObjectUrl('base', url);
     fileBlobs.base = { blob: entry.blob, name: entry.name, metadata: entry.metadata };
     garmentDispCache = null;
-    destroyMask();
+    // Mask cọ per-overlay theo toạ độ artboard — giữ nguyên khi đổi phôi.
     currentLibraryBaseId = entry.id;
     if (entry.transform) {
       // Phôi này đã từng được chỉnh → đưa về đúng vị trí/kích thước đã lưu.
@@ -1444,7 +1444,7 @@
         replaceObjectUrl('base', url);
         fileBlobs.base = makeAsset(file, metadata);
         garmentDispCache = null; // invalidate displacement map when garment changes
-        destroyMask();           // garment changed → mask no longer valid
+        // Mask cọ per-overlay giữ nguyên khi đổi phôi.
         // Lưu phôi vào thư viện để lần sau bấm là dùng lại ngay.
         const entry = await addBaseToLibrary(file, metadata);
         currentLibraryBaseId = entry?.id ?? null;
@@ -2209,11 +2209,6 @@
     entry.ctx.fillStyle = '#fff';
     entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
     scheduleFabricPreview();
-  }
-
-  // Đổi phôi → mọi mask vị trí vô nghĩa.
-  function destroyMask() {
-    clearAllOverlayMasks();
   }
 
   // ── Pending mask assets: set during workspace restore, consumed by runFabricPreview
@@ -4190,7 +4185,6 @@
     fileUrls.base = null;
     fileBlobs.base = null;
     garmentDispCache = null;
-    destroyMask();
     currentLibraryBaseId = null;
     renderBaseLibrary();
     scene = Core.resetBase(scene);
