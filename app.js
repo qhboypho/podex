@@ -2026,18 +2026,6 @@
       const artwork = await loadImage(overlay.artwork.src);
       artworkHeight = overlaySize * artwork.naturalHeight / artwork.naturalWidth;
       artworkContext.drawImage(artwork, -overlaySize / 2, -artworkHeight / 2, overlaySize, artworkHeight);
-      // Mask cọ theo hệ local ảnh — áp destination-in trong cùng không gian xoay
-      // (vết xoá bám theo artwork, giống hệt preview).
-      const overlayMask = getExistingOverlayMask(overlay.id);
-      if (overlayMask) {
-        artworkContext.globalAlpha = 1;
-        artworkContext.shadowColor = 'transparent';
-        artworkContext.shadowBlur = 0;
-        artworkContext.shadowOffsetY = 0;
-        artworkContext.globalCompositeOperation = 'destination-in';
-        artworkContext.drawImage(overlayMask.canvas, -overlaySize / 2, -artworkHeight / 2, overlaySize, artworkHeight);
-        artworkContext.globalCompositeOperation = 'source-over';
-      }
     } else {
       drawDefaultArtwork(artworkContext, overlaySize, overlay.kind, overlay.artwork?.label || 'ROUGE / 07');
     }
@@ -2077,6 +2065,20 @@
       artworkContext.restore();
     }
 
+    // Apply THIS overlay's eraser mask — scale từ kích thước preview (artboard)
+    // lên kích thước export (destination-in nhân alpha: vùng cọ xoá bị xoá luôn)
+    const overlayMask = getExistingOverlayMask(overlay.id);
+    if (overlayMask && overlayMask.canvas.width > 0) {
+      const maskScaled = document.createElement('canvas');
+      maskScaled.width = width;
+      maskScaled.height = height;
+      maskScaled.getContext('2d').drawImage(overlayMask.canvas, 0, 0, width, height);
+      artworkContext.save();
+      artworkContext.globalCompositeOperation = 'destination-in';
+      artworkContext.drawImage(maskScaled, 0, 0);
+      artworkContext.restore();
+    }
+
     context.save();
     context.globalCompositeOperation = 'source-over';
     context.drawImage(artworkLayer, 0, 0);
@@ -2094,9 +2096,9 @@
   let garmentDispCache = null; // { src, dispMap: {dx,dy,lum,W,H} }
 
   // ─── Mask canvas ──────────────────────────────────────────────────────────
-  // MỖI overlay có một mask riêng theo HỆ TOẠ ĐỘ LOCAL của ảnh artwork (bám
-  // theo artwork khi di chuyển/xoay/resize) — vết cọ của lớp này không bao giờ
-  // đè lên lớp khác và không lệch khi artwork thay đổi vị trí.
+  // MỖI overlay có một mask riêng theo toạ độ ARTBOARD (đã chứng minh chuẩn):
+  // nét cọ vẽ đâu xoá đó, không đè lên lớp khác. Mask theo hệ local ảnh đã bị
+  // loại vì gây lệch toạ độ khi ảnh không vuông.
 
   const overlayMasks = new Map(); // overlayId → { canvas, ctx }
 
@@ -2107,16 +2109,7 @@
     return true;
   }
 
-  // Kích thước mask local: theo kích thước ảnh gốc, giới hạn cạnh dài 800px.
-  function overlayMaskSize(overlay) {
-    const w = Number(overlay.artwork?.metadata?.width) || 400;
-    const h = Number(overlay.artwork?.metadata?.height) || 400;
-    const cap = 800;
-    const k = Math.min(1, cap / Math.max(w, h));
-    return { w: Math.max(16, Math.round(w * k)), h: Math.max(16, Math.round(h * k)) };
-  }
-
-  // Tạo/nạp mask của overlay, resize giữ nguyên nội dung khi kích thước đổi.
+  // Tạo/nạp mask của overlay ở kích thước artboard, resize giữ nguyên nội dung.
   function ensureOverlayMask(overlayId, W, H) {
     let entry = overlayMasks.get(overlayId);
     if (!entry) {
@@ -2539,17 +2532,27 @@
           artCtx.globalCompositeOperation = 'source-over';
         }
 
-        // ── 6b. Apply THIS overlay's brush mask — mask theo hệ local ảnh, áp
-        // destination-in trong không gian đã xoay của artwork (sau warp/tint vì
-        // putImageData ở bước 5 ghi đè toàn bộ nội dung canvas).
+        // ── 6b. Apply THIS overlay's brush mask into artCanvas alpha (toạ độ artboard)
         const overlayMask = getExistingOverlayMask(overlay.id);
-        if (overlayMask) {
-          artCtx.save();
-          artCtx.translate(bW / 2, bH / 2);
-          artCtx.rotate(angle);
-          artCtx.globalCompositeOperation = 'destination-in';
-          artCtx.drawImage(overlayMask.canvas, -overlaySize / 2, -artH / 2, overlaySize, artH);
-          artCtx.restore();
+        if (overlayMask && overlayMask.canvas.width > 0) {
+          const mW = overlayMask.canvas.width, mH = overlayMask.canvas.height;
+          const masked = artCtx.getImageData(0, 0, bW, bH);
+          const ad = masked.data;
+          const maskImg = overlayMask.ctx.getImageData(0, 0, mW, mH);
+          const md = maskImg.data;
+          for (let py = 0; py < bH; py++) {
+            for (let px = 0; px < bW; px++) {
+              const dispX = Math.round(artX + px);
+              const dispY = Math.round(artY + py);
+              if (dispX < 0 || dispX >= mW || dispY < 0 || dispY >= mH) continue;
+              const maskAlpha = md[(dispY * mW + dispX) * 4 + 3];
+              if (maskAlpha < 255) {
+                const ai = (py * bW + px) * 4;
+                ad[ai + 3] = Math.round(ad[ai + 3] * maskAlpha / 255);
+              }
+            }
+          }
+          artCtx.putImageData(masked, 0, 0);
         }
 
         // ── 7. Composite artwork onto preview canvas with blend mode + filter
@@ -4788,43 +4791,35 @@
   // ── Paint one brush stamp into the mask at (x, y)
   // Overlay đang cọ — thiết lập khi pointerdown, dùng cho mọi nét vẽ trong phiên.
   let brushTargetOverlayId = null;
-  // Ngữ cảnh chuyển toạ độ của phiên cọ: đổi điểm pointer (artboard px) về hệ
-  // local của ảnh artwork (masks theo ảnh gốc) kèm tỷ lệ bán kính cọ.
-  let brushCtx = null;
 
-  function paintBrushAt(artX, artY) {
-    if (!brushTargetOverlayId || !brushCtx) return;
+  function paintBrushAt(x, y) {
+    if (!brushTargetOverlayId) return;
     const entry = overlayMasks.get(brushTargetOverlayId);
     if (!entry) return;
-    const { toLocal, radius } = brushCtx;
-    const local = toLocal(artX, artY);
-    const r = Math.max(0.5, radius);
+    const targetCtx = entry.ctx;
+    const r = Math.max(1, brushState.size);
     const innerR = r * Math.min(0.99, brushState.hardness);
     const alpha = brushState.opacity;
 
-    targetCtxSaveAndPaint(entry.ctx, local.x, local.y, r, innerR, alpha, brushState.mode);
-  }
-
-  function targetCtxSaveAndPaint(ctx, x, y, r, innerR, alpha, mode) {
-    ctx.save();
-    if (mode === 'restore') {
-      ctx.globalCompositeOperation = 'source-over';
-      const grd = ctx.createRadialGradient(x, y, innerR, x, y, r);
+    targetCtx.save();
+    if (brushState.mode === 'restore') {
+      targetCtx.globalCompositeOperation = 'source-over';
+      const grd = targetCtx.createRadialGradient(x, y, innerR, x, y, r);
       grd.addColorStop(0, `rgba(255,255,255,${alpha})`);
       grd.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = grd;
+      targetCtx.fillStyle = grd;
     } else {
       // erase or blur — remove alpha from mask so artwork becomes transparent there
-      ctx.globalCompositeOperation = 'destination-out';
-      const grd = ctx.createRadialGradient(x, y, innerR, x, y, r);
+      targetCtx.globalCompositeOperation = 'destination-out';
+      const grd = targetCtx.createRadialGradient(x, y, innerR, x, y, r);
       grd.addColorStop(0, `rgba(0,0,0,${alpha})`);
       grd.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = grd;
+      targetCtx.fillStyle = grd;
     }
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    targetCtx.beginPath();
+    targetCtx.arc(x, y, r, 0, Math.PI * 2);
+    targetCtx.fill();
+    targetCtx.restore();
   }
 
   // ── Interpolated stroke: fill gaps between pointer samples
@@ -4872,21 +4867,19 @@
         drawCursorPreview(x, y);
       }
 
-      if (brushPainting && brushTargetOverlayId && brushCtx) {
-        const rect = element.artboard.getBoundingClientRect();
-        const mc = {
-          x: (event.clientX - rect.left) * (element.artboard.clientWidth / rect.width),
-          y: (event.clientY - rect.top) * (element.artboard.clientHeight / rect.height),
-        };
-        // Luôn truyền toạ độ artboard — paintBrushAt tự chuyển sang local.
-        paintStroke(brushLastX, brushLastY, mc.x, mc.y);
-        brushLastX = mc.x; brushLastY = mc.y;
+      if (brushPainting && brushTargetOverlayId) {
+        const entry = overlayMasks.get(brushTargetOverlayId);
+        if (entry) {
+          const mc = toCanvasCoords(event, entry.canvas);
+          paintStroke(brushLastX, brushLastY, mc.x, mc.y);
+          brushLastX = mc.x; brushLastY = mc.y;
+        }
       }
     });
 
     element.artboard.addEventListener('pointerdown', (event) => {
       if (!brushState.active || event.button !== 0) return;
-      // Cọ áp cho overlay đang chọn — mỗi lớp một mask riêng theo hệ local ảnh.
+      // Cọ áp cho overlay đang chọn — mỗi lớp một mask riêng ở kích thước artboard.
       const overlay = Core.getActiveOverlay(scene);
       if (!overlay?.artwork?.src) {
         showToast('Chọn một artwork để cọ xoá / làm mờ.');
@@ -4895,35 +4888,12 @@
       const W = element.artboard.clientWidth;
       const H = element.artboard.clientHeight;
       if (W < 2 || H < 2) return;
-      const drawW = W * 0.205 * overlay.scale; // bề rộng artwork hiển thị (px)
-      const imgW = Number(overlay.artwork?.metadata?.width) || 400;
-      const imgH = Number(overlay.artwork?.metadata?.height) || Math.round(imgW / 1.19);
-      const maskSize = overlayMaskSize(overlay);
-      const cos = Math.cos(-overlay.rotation * Math.PI / 180);
-      const sin = Math.sin(-overlay.rotation * Math.PI / 180);
-      const cx = W * overlay.x / 100;
-      const cy = H * overlay.y / 100;
-      brushCtx = {
-        radius: Math.max(0.5, brushState.size * (imgW / drawW)),
-        toLocal: (px, py) => {
-          const dx = px - cx;
-          const dy = py - cy;
-          const lx0 = dx * cos - dy * sin;
-          const ly0 = dx * sin + dy * cos;
-          // Hệ local của ảnh: tâm artwork = tâm ảnh → cộng nửa kích thước.
-          return { x: lx0 / drawW * imgW + imgW / 2, y: ly0 / drawW * imgH + imgH / 2 };
-        },
-      };
-      const mask = ensureOverlayMask(overlay.id, maskSize.w, maskSize.h);
+      const mask = ensureOverlayMask(overlay.id, W, H);
       brushTargetOverlayId = overlay.id;
       brushPainting = true;
       element.artboard.setPointerCapture(event.pointerId);
       saveMaskSnapshot(overlay.id); // save before stroke for undo
-      const rect = element.artboard.getBoundingClientRect();
-      const mc = {
-        x: (event.clientX - rect.left) * (W / rect.width),
-        y: (event.clientY - rect.top) * (H / rect.height),
-      };
+      const mc = toCanvasCoords(event, mask.canvas);
       brushLastX = mc.x; brushLastY = mc.y;
       paintBrushAt(mc.x, mc.y);
       updateMaskOverlay();
