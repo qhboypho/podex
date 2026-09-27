@@ -6,8 +6,10 @@
   const BaseLibrary = globalThis.FormBaseLibrary;
   const ArtworkLibrary = globalThis.FormArtworkLibrary;
   const FabricEngine = globalThis.FormFabricEngine;
+  const MaskAssets = globalThis.FormMaskAssets;
   const ChromaKey = globalThis.FormChromaKey;
   const Icons = globalThis.FormIcons;
+  const BackgroundGradients = globalThis.FormBackgroundGradients;
   if (!Core) {
     throw new Error('Không thể khởi tạo bộ xử lý FORM.');
   }
@@ -123,6 +125,10 @@
     blurRadiusOutput: $('#blurRadiusOutput'),
     contrastRange: $('#contrastRange'),
     contrastOutput: $('#contrastOutput'),
+    brightnessRange: null,
+    brightnessOutput: null,
+    artworkContrastRange: null,
+    artworkContrastOutput: null,
     embossRange: $('#embossRange'),
     embossOutput: $('#embossOutput'),
     edgeBlendRange: $('#edgeBlendRange'),
@@ -145,6 +151,20 @@
     artworkReplaceTrigger: $('#artworkReplaceTrigger'),
     artworkChromaKey: $('#artworkChromaKey'),
     artworkChromaBlack: $('#artworkChromaBlack'),
+    garmentColorChips: [...document.querySelectorAll('.garment-color-chip')],
+    garmentColorLabel: $('#garmentColorLabel'),
+    garmentCustomColor: $('#garmentCustomColor'),
+    artworkChromaWhite: $('#artworkChromaWhite'),
+    artworkInvertBtn: $('#artworkInvertBtn'),
+    presetLeftChest: $('#presetLeftChest'),
+    presetRightChest: $('#presetRightChest'),
+    presetCenterChest: $('#presetCenterChest'),
+    presetOversize: $('#presetOversize'),
+    presetNeck: $('#presetNeck'),
+    presetCenterHorizontal: $('#presetCenterHorizontal'),
+    batchExportTrigger: $('#batchExportTrigger'),
+    batchExportFiles: $('#batchExportFiles'),
+
     chromaMessage: $('#chromaMessage'),
     overlaysContainer: $('#overlaysContainer'),
     // Watermark grid additions
@@ -232,7 +252,29 @@
     blush: 'Blush pastel',
     sage: 'Sage calm',
     slate: 'Slate modern',
+    sand: 'Sand editorial',
+    lavender: 'Lavender set',
+    sunset: 'Sunset glow',
+    midnight: 'Midnight navy',
+    noir: 'Noir studio',
+    concrete: 'Concrete texture',
+    gallery: 'Gallery ivory',
+    cobalt: 'Cobalt pop',
   };
+  for (const gradient of BackgroundGradients?.list?.() || []) presetNames[gradient.id] = gradient.name;
+  const expandedPresetBackgrounds = [
+    ['sand', 'Nền sand editorial'],
+    ['lavender', 'Nền lavender set'],
+    ['sunset', 'Nền sunset glow'],
+    ['midnight', 'Nền midnight navy'],
+    ['noir', 'Nền noir studio'],
+    ['concrete', 'Nền concrete texture'],
+    ['gallery', 'Nền gallery ivory'],
+    ['cobalt', 'Nền cobalt pop'],
+    ...(BackgroundGradients?.list?.() || []).map((gradient) => [gradient.id, `Gradient ${gradient.label}`]),
+  ];
+  const gradientPresetIds = new Set((BackgroundGradients?.list?.() || []).map((gradient) => gradient.id));
+  const backgroundGradientPreviewCache = new Map();
   const fileUrls = { base: null, background: null, logo: null };
   const fileBlobs = { base: null, background: null, logo: null };
   // Per-overlay artwork blobs/urls keyed by overlay id
@@ -240,6 +282,7 @@
   const artworkBlobs = {};  // { [overlayId]: { blob, name, metadata } }
   const revisions = { base: 0, background: 0, logo: 0, artwork: 0 };
   let scene = Core.createScene();
+  let workspaceBooting = true;
   let workspaceView = Core.normalizeWorkspaceView();
   let toastTimer = 0;
   let draftDirty = false;
@@ -248,6 +291,7 @@
   let artworkSelected = false;
   let autoSaveTimer = 0;
   let workspaceRevision = 0;
+  let persistenceChain = Promise.resolve();
   const AUTO_SAVE_DELAY = 180;
 
   // ─── Thư viện phôi ────────────────────────────────────────────────────────
@@ -352,6 +396,30 @@
 
   // Call before UI is wired so sliders get correct initial values
   loadSettings();
+
+  function createArtworkToneControls() {
+    const anchor = element.opacityRange?.closest('.field-grid');
+    if (!anchor || document.querySelector('#brightnessRange')) return;
+    const controls = document.createElement('div');
+    controls.className = 'field-grid';
+    controls.setAttribute('aria-label', 'Ánh sáng artwork đang chọn');
+    controls.innerHTML = `
+      <div class="field"><label for="brightnessRange">Brightness <output id="brightnessOutput">0</output></label><input class="range" id="brightnessRange" type="range" min="-100" max="100" value="0" step="1" /></div>
+      <div class="field"><label for="artworkContrastRange">Contrast <output id="artworkContrastOutput">0</output></label><input class="range" id="artworkContrastRange" type="range" min="-100" max="100" value="0" step="1" /></div>`;
+    anchor.insertAdjacentElement('afterend', controls);
+    element.brightnessRange = $('#brightnessRange');
+    element.brightnessOutput = $('#brightnessOutput');
+    element.artworkContrastRange = $('#artworkContrastRange');
+    element.artworkContrastOutput = $('#artworkContrastOutput');
+  }
+
+  createArtworkToneControls();
+
+  function getArtworkImageFilter(overlay) {
+    const brightness = Math.max(0, 100 + Number(overlay?.brightness || 0));
+    const contrast = Math.max(0, 100 + Number(overlay?.contrast || 0));
+    return `${overlay?.invert ? 'invert(1) ' : ''}brightness(${brightness}%) contrast(${contrast}%)`;
+  }
 
   function formatBytes(bytes) {
     if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -562,7 +630,7 @@
       return { blob: file, name: file.name, removed: false, mode: null };
     }
     try {
-      const { blob, changed, mode } = await ChromaKey.processBlob(file, { mode: 'auto' });
+      const { blob, changed, mode } = await ChromaKey.processBlob(file, { mode: 'auto', shadowGreen: true });
       if (!changed) return { blob: file, name: file.name, removed: false, mode: null };
       const name = file.name.replace(/\.[^/.]+$/, '') + '.png';
       return { blob, name, removed: true, mode };
@@ -587,8 +655,87 @@
     return url;
   }
 
+
+  function shadeColor(color, percent) {
+    let R = parseInt(color.substring(1,3), 16);
+    let G = parseInt(color.substring(3,5), 16);
+    let B = parseInt(color.substring(5,7), 16);
+    R = Math.min(255, Math.max(0, Math.floor(R * (100 + percent) / 100)));
+    G = Math.min(255, Math.max(0, Math.floor(G * (100 + percent) / 100)));
+    B = Math.min(255, Math.max(0, Math.floor(B * (100 + percent) / 100)));
+    const RR = (R.toString(16).length === 1 ? "0" + R.toString(16) : R.toString(16));
+    const GG = (G.toString(16).length === 1 ? "0" + G.toString(16) : G.toString(16));
+    const BB = (B.toString(16).length === 1 ? "0" + B.toString(16) : B.toString(16));
+    return "#" + RR + GG + BB;
+  }
+
+  const _effectiveBaseCache = new Map();
+  function getBaseEffectiveSrc(curScene) {
+    const color = curScene.base?.color;
+    const src = curScene.base?.src;
+    if (!color || !src) return src;
+
+    const cacheKey = `${src}__${color}`;
+    if (_effectiveBaseCache.has(cacheKey)) {
+      return _effectiveBaseCache.get(cacheKey);
+    }
+
+    // 1. Phôi vector SVG mặc định
+    if (src.startsWith('data:image/svg+xml')) {
+      try {
+        const decoded = decodeURIComponent(src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''));
+        const darkened = shadeColor(color, -16);
+        const darkStop = shadeColor(color, -30);
+        const newTee = `<linearGradient id="tee" x1="129" x2="438" y1="200" y2="547" gradientUnits="userSpaceOnUse"><stop stop-color="${color}"/><stop offset=".48" stop-color="${darkened}"/><stop offset="1" stop-color="${darkStop}"/></linearGradient>`;
+        const replaced = decoded
+          .replace(/<linearGradient id="tee"[\s\S]*?<\/linearGradient>/, newTee)
+          .replace(/fill="#E0E0D9"/g, `fill="${darkened}"`);
+        const tintedSvg = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(replaced)}`;
+        _effectiveBaseCache.set(cacheKey, tintedSvg);
+        return tintedSvg;
+      } catch {
+        return src;
+      }
+    }
+
+    // 2. Phôi ảnh chụp upload (PNG / JPG)
+    if (!_effectiveBaseCache.has(cacheKey)) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.restore();
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-in';
+        ctx.drawImage(img, 0, 0);
+        ctx.restore();
+        const tintedData = c.toDataURL('image/png');
+        _effectiveBaseCache.set(cacheKey, tintedData);
+        if (scene.base?.color === color && scene.base?.src === src) {
+          element.baseImage.src = tintedData;
+          element.baseThumbnail.src = tintedData;
+        }
+      };
+      img.src = src;
+      return src;
+    }
+
+    return _effectiveBaseCache.get(cacheKey) || src;
+  }
+
   function render() {
     const overlays = Core.getOverlays(scene);
+    // Khi vừa reload, artwork HTML chưa áp mask phải không được phép ló ra
+    // trong lúc canvas đang nạp mask đã lưu.
+    const awaitingMaskPreview = Boolean(pendingMaskAssets || pendingMaskRestore);
     const overlay = Core.getActiveOverlay(scene);
     const baseBox = Core.getBaseDisplayBox(scene);
     const sourceIsDefault = scene.base.kind === 'default';
@@ -598,13 +745,21 @@
     element.artboard.dataset.bg = scene.background.value || 'linen';
     element.artboard.dataset.ratio = scene.canvasRatio;
     element.artboard.dataset.uploadedBackground = String(backgroundIsUploaded);
+    const gradientPreset = !backgroundIsUploaded && gradientPresetIds.has(scene.background.value);
+    element.artboard.classList.toggle('gradient-background', gradientPreset);
+    element.artboard.style.backgroundImage = gradientPreset
+      ? `url("${getBackgroundGradientPreview(scene.background.value, scene.canvasRatio)}")`
+      : '';
+    element.artboard.style.backgroundSize = gradientPreset ? 'cover' : '';
+    element.artboard.style.backgroundPosition = gradientPreset ? 'center' : '';
     element.artboard.style.setProperty('--zoom', String(workspaceView.zoom));
     element.artboard.style.setProperty('--pan-x', `${workspaceView.panX}px`);
     element.artboard.style.setProperty('--pan-y', `${workspaceView.panY}px`);
     element.backgroundImage.classList.toggle('visible', backgroundIsUploaded);
     element.backgroundImage.src = backgroundIsUploaded ? scene.background.src : '';
 
-    element.baseImage.src = scene.base.src;
+    const effectiveBaseSrc = getBaseEffectiveSrc(scene);
+    element.baseImage.src = effectiveBaseSrc;
     element.baseImage.classList.toggle('uploaded', !sourceIsDefault);
     element.baseImage.classList.toggle('locked', baseLocked);
     element.baseImage.style.setProperty('--base-scale', String(baseBox.scale));
@@ -616,7 +771,7 @@
     element.baseSelection.style.height = `${baseBox.height}%`;
     element.baseSelection.classList.toggle('visible', baseSelected);
     element.baseSelection.setAttribute('aria-hidden', String(!baseSelected));
-    element.baseThumbnail.src = scene.base.src;
+    element.baseThumbnail.src = effectiveBaseSrc;
     element.baseName.textContent = scene.base.name;
     element.baseMeta.textContent = baseMetaText();
     element.baseLayerName.textContent = sourceIsDefault ? 'Phôi & người mẫu' : scene.base.name;
@@ -657,6 +812,12 @@
       element.artworkOverlay.classList.toggle('locked-overlay', overlay.locked);
       element.artworkOverlay.setAttribute('aria-valuetext', `Artwork ${percentInput(overlay.x)} ngang, ${percentInput(overlay.y)} dọc`);
       element.artworkImage.src = artworkIsUploaded ? overlay.artwork.src : '';
+      element.artworkImage.style.visibility = awaitingMaskPreview ? 'hidden' : '';
+      element.artworkOverlay.querySelector('.artwork-default').style.visibility = awaitingMaskPreview ? 'hidden' : '';
+      element.artworkImage.style.filter = getArtworkImageFilter(overlay);
+      if (element.artworkInvertBtn) {
+        element.artworkInvertBtn.classList.toggle('active', Boolean(overlay.invert));
+      }
       element.artworkDefaultLabel.textContent = overlay.artwork?.label || 'ROUGE / 07';
       element.artworkOverlay.style.display = overlay.hidden ? 'none' : '';
       element.artworkOverlay.dataset.overlayId = String(overlay.id);
@@ -683,6 +844,12 @@
       element.sizeOutput.textContent = `${Math.round(34 * overlay.scale)} cm`;
       element.rotationOutput.textContent = degree(overlay.rotation);
       element.opacityOutput.textContent = percentage(overlay.opacity);
+      if (element.brightnessRange) {
+        element.brightnessRange.value = overlay.brightness || 0;
+        element.brightnessOutput.textContent = `${overlay.brightness || 0}`;
+        element.artworkContrastRange.value = overlay.contrast || 0;
+        element.artworkContrastOutput.textContent = `${overlay.contrast || 0}`;
+      }
       element.artworkX.value = percentInput(overlay.x);
       element.artworkY.value = percentInput(overlay.y);
       element.printType.classList.toggle('active', overlay.kind === 'print');
@@ -718,6 +885,7 @@
     // Text & icon decorations: đồng bộ hit-layer ngay, vẽ canvas theo rAF
     syncDecorHitNodes();
     syncDecorActionBar();
+    syncGroupSelection();
     scheduleDecorPreview();
     syncDecorPanel();
     warmBaseHitCache();
@@ -867,6 +1035,9 @@
       node.classList.toggle('locked-overlay', ov.locked);
       const img = node.querySelector('.artwork-image');
       img.src = ov.artwork?.src || '';
+      img.style.visibility = (pendingMaskAssets || pendingMaskRestore) ? 'hidden' : '';
+      node.querySelector('.artwork-default').style.visibility = (pendingMaskAssets || pendingMaskRestore) ? 'hidden' : '';
+      img.style.filter = getArtworkImageFilter(ov);
       node.querySelector('.artwork-default span').textContent = ov.artwork?.label || 'ROUGE / 07';
     }
   }
@@ -878,7 +1049,7 @@
     let html = '';
     const eyeSvg = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.5"/></svg>';
     for (const ov of overlays) {
-      const isActive = ov.id === activeOverlay?.id;
+      const isActive = multiSelectKeys.size ? multiSelectKeys.has(`artwork:${ov.id}`) : ov.id === activeOverlay?.id && artworkSelected;
       const hasImage = Boolean(ov.artwork?.src);
       const name = ov.artwork?.name || 'Rouge 07 · mặc định';
       const label = ov.artwork?.label || 'ROUGE';
@@ -893,15 +1064,19 @@
         + `<span class="artwork-item-meta">${ov.kind === 'embroidery' ? 'Thêu' : 'In'} · ${Math.round(34 * ov.scale)}cm${isLocked ? ' · 🔒' : ''}</span></div>`
         + `<button class="artwork-item-lock${isLocked ? ' is-locked' : ''}" data-lock-id="${ov.id}" type="button" title="${isLocked ? 'Mở khóa' : 'Khóa'}">${isLocked ? '🔒' : '🔓'}</button>`
         + `<button class="artwork-item-remove" data-remove-id="${ov.id}" type="button" title="Xóa artwork này">✕</button>`
+        + `<button class="artwork-item-lock" data-duplicate-artwork="${ov.id}" type="button" title="Duplicate artwork" aria-label="Duplicate artwork">⧉</button>`
         + `</div>`;
     }
     list.innerHTML = html;
+    list.querySelectorAll('[data-duplicate-artwork]').forEach(button=>button.addEventListener('click',event=>{
+      event.stopPropagation();duplicateWorkspaceLayers([`artwork:${button.dataset.duplicateArtwork}`]);
+    }));
 
     // Attach events
     list.querySelectorAll('.artwork-list-item').forEach(item => {
       item.addEventListener('click', (e) => {
         if (e.target.closest('.artwork-item-remove, .artwork-item-lock, [data-overlay-eye]')) return;
-        selectArtworkOverlay(Number(item.dataset.overlayId));
+        selectListLayers([`artwork:${item.dataset.overlayId}`],e);
       });
     });
     list.querySelectorAll('[data-overlay-eye]').forEach(btn => {
@@ -913,6 +1088,7 @@
       });
     });
     list.querySelectorAll('.artwork-item-lock').forEach(btn => {
+      if(!btn.dataset.lockId) return;
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const id = Number(btn.dataset.lockId);
@@ -994,7 +1170,7 @@
   async function workspaceRecord() {
     const maskAssets = await getMaskBlobs();
     return {
-      version: 2,
+      version: 3,
       savedAt: Date.now(),
       draft: Core.serializeDraft(scene),
       viewport: workspaceView,
@@ -1030,7 +1206,17 @@
     void persistWorkspace({ silent: true, revision: workspaceRevision });
   }
 
-  async function persistWorkspace({ silent = false, revision = workspaceRevision } = {}) {
+  // Mask là dữ liệu pixel có thể mất nếu người dùng reload ngay sau khi nhấc
+  // cọ. Lưu nó ngay sau mỗi nét, thay vì chỉ chờ debounce autosave.
+  function persistMaskMutation() {
+    markDirty();
+    window.clearTimeout(autoSaveTimer);
+    autoSaveTimer = 0;
+    void persistWorkspace({ silent: true, revision: workspaceRevision });
+  }
+
+  async function persistWorkspaceNow({ silent = false, revision = workspaceRevision } = {}) {
+    if(workspaceBooting) return false;
     if (!DraftStore) {
       if (!silent) showToast('Bộ nhớ cục bộ chưa sẵn sàng trên trình duyệt này.', 'error');
       return false;
@@ -1066,6 +1252,13 @@
     }
   }
 
+  // IndexedDB writes phải tuần tự: một autosave cũ không được hoàn thành sau
+  // lần lưu nét cọ mới rồi ghi đè mask vừa vẽ.
+  function persistWorkspace(options = {}) {
+    persistenceChain = persistenceChain.catch(() => undefined).then(() => persistWorkspaceNow(options));
+    return persistenceChain;
+  }
+
   async function saveWorkspace() {
     window.clearTimeout(autoSaveTimer);
     autoSaveTimer = 0;
@@ -1097,7 +1290,7 @@
     if (!DraftStore) return;
     try {
       const stored = await DraftStore.load();
-      if (!stored || (stored.version !== 1 && stored.version !== 2) || !stored.draft) return;
+      if (!stored || (stored.version !== 1 && stored.version !== 2 && stored.version !== 3) || !stored.draft) return;
       currentLibraryBaseId = stored.baseLibraryId ?? null;
       Object.assign(overlayLibraryIds, stored.overlayLibraryIds || {});
       const assets = stored.assets || {};
@@ -1113,7 +1306,7 @@
       scene = Core.applyDraft(scene, stored.draft);
       workspaceView = Core.normalizeWorkspaceView(stored.viewport);
 
-      if (stored.version === 2 && stored.artworkAssets) {
+      if (stored.version >= 2 && stored.artworkAssets) {
         // v2: restore per-overlay artwork blobs
         const allOverlays = [...scene.overlays, ...scene.backOverlays];
         for (const ov of allOverlays) {
@@ -1141,18 +1334,23 @@
         }
       }
       scene = Core.selectView(scene, stored.draft.view);
+      scene = Core.removeUnusedArtworkPlaceholders(scene);
       draftDirty = false;
       const time = new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date(stored.savedAt));
       stampDraft(`ĐÃ KHÔI PHỤC ${time}`);
-      render();
-      // Defer mask restore: runFabricPreview will pick it up once artboard is sized
+      // Khôi phục dữ liệu mask trước khi render. Nhờ vậy render/ResizeObserver
+      // không thể chạy trước rồi làm mất lượt nạp mask đang chờ.
       if (stored.maskAssets) {
-        pendingMaskAssets = stored.maskAssets;
+        pendingMaskAssets = MaskAssets?.normalizeMaskAssetMap(stored.maskAssets) || {};
       } else if (stored.mask) {
         // Draft cũ (mask toàn cục): gán cho overlay đầu tiên của mặt đang xem.
         const firstWithArt = Core.getOverlays(scene).find((ov) => ov.artwork?.src);
         if (firstWithArt) pendingMaskAssets = { [firstWithArt.id]: stored.mask };
       }
+      // Nạp bitmap mask trước render đầu tiên. Không phụ thuộc vào lượt
+      // fabric-preview đầu có thể bị ResizeObserver/người dùng ngắt giữa chừng.
+      await restorePendingMasks(0, 0);
+      render();
       setStatus('Đã khôi phục bản lưu tại máy');
       showToast('Đã khôi phục workspace cục bộ. Phôi vẫn được khóa.');
     } catch (error) {
@@ -1383,20 +1581,12 @@
 
   async function applyArtworkFromLibrary(entry) {
     await syncArtworkLibrary();
-    const currentActive = Core.getActiveOverlay(scene);
-    if (currentActive && currentActive.artwork?.src) {
-      scene = Core.addOverlay(scene);
-    } else if (!currentActive) {
-      scene = Core.addOverlay(scene);
-    }
-    const targetOverlay = Core.getActiveOverlay(scene);
-    if (!targetOverlay) return;
     const url = URL.createObjectURL(entry.blob);
     const artLabel = entry.name.replace(/\.[^/.]+$/, '').slice(0, 18).toUpperCase();
-    scene = Core.updateOverlay(scene, {
-      artwork: { name: entry.name, src: url, metadata: entry.metadata, label: artLabel },
+    scene = Core.insertArtwork(scene, { name: entry.name, src: url, metadata: entry.metadata, label: artLabel }, {
       kind: entry.kind || 'print',
-    }, targetOverlay.id);
+    });
+    const targetOverlay = Core.getActiveOverlay(scene);
     if (entry.transform?.scale) {
       scene = Core.resizeOverlay(scene, entry.transform.scale, targetOverlay.id);
     }
@@ -1465,15 +1655,9 @@
         // Artwork upload: check if current active overlay has no artwork yet
         const currentActive = Core.getActiveOverlay(scene);
         const hasExistingArt = currentActive && currentActive.artwork?.src;
-        if (hasExistingArt || !currentActive) {
-          // Thêm lớp mới khi overlay hiện tại đã có ảnh, hoặc khi danh sách
-          // overlay rỗng (người dùng đã xóa hết artwork trước đó).
-          scene = Core.addOverlay(scene);
-        }
-        const targetOverlay = Core.getActiveOverlay(scene);
-
         // Tự động khử nền xanh lá / nền đen nếu ảnh có.
         const keyed = await maybeRemoveBackground(file);
+        if(revision !== revisions[kind]) {URL.revokeObjectURL(url);return;}
         let artSrc = url;
         let artBlob = file;
         let artName = file.name;
@@ -1485,7 +1669,8 @@
         }
         const artLabel = artName.replace(/\.[^/.]+$/, '').slice(0, 18).toUpperCase();
         const artwork = { name: artName, src: artSrc, metadata, label: artLabel };
-        scene = Core.updateOverlay(scene, { artwork }, targetOverlay.id);
+        scene = Core.insertArtwork(scene, artwork);
+        const targetOverlay = Core.getActiveOverlay(scene);
         artworkUrls[targetOverlay.id] = artSrc;
         artworkBlobs[targetOverlay.id] = { blob: artBlob, name: artName, metadata };
         // Lưu artwork vào thư viện để lần sau bấm là dùng lại đúng size.
@@ -1921,6 +2106,7 @@
   }
 
   function drawPresetBackground(context, width, height, preset) {
+    if (BackgroundGradients?.draw?.(context, width, height, preset)) return;
     const gradients = {
       linen: ['#c9c4bc', '#d9d3ca', '#b9b3ac'],
       coast: ['#a9c8c2', '#d6e2d2', '#ead4bb'],
@@ -1931,9 +2117,17 @@
       blush: ['#fbeef0', '#f7e2e6', '#eecdd6'],
       sage: ['#eef3ec', '#e0ebe0', '#cbdcc9'],
       slate: ['#5c6b74', '#43525c', '#2c3941'],
+      sand: ['#e7d4b8', '#d6b58a', '#b98759'],
+      lavender: ['#ece7f5', '#cfc4e6', '#a995ca'],
+      sunset: ['#ffd6b7', '#ef9c8b', '#9f5369'],
+      midnight: ['#263956', '#15243e', '#091321'],
+      noir: ['#4d4d4d', '#232323', '#090909'],
+      concrete: ['#d4d0c8', '#bbb6ad', '#98948e'],
+      gallery: ['#fffaf1', '#f5ebdc', '#e4d4bf'],
+      cobalt: ['#4f83c7', '#24549d', '#142f63'],
     };
     // Nền "clean": dùng vignette mềm ở giữa thay cho vệt nắng chói.
-    const cleanPresets = new Set(['snow', 'pearl', 'blush', 'sage', 'slate']);
+    const cleanPresets = new Set(['snow', 'pearl', 'blush', 'sage', 'slate', 'sand', 'lavender', 'sunset', 'midnight', 'noir', 'concrete', 'gallery', 'cobalt']);
     const colors = gradients[preset] || gradients.linen;
     const gradient = context.createLinearGradient(0, 0, width, height);
     gradient.addColorStop(0, colors[0]);
@@ -1944,7 +2138,7 @@
 
     if (cleanPresets.has(preset)) {
       // Vignette radial nhẹ: sáng ở giữa (nơi đặt model), tối dần ra rìa.
-      const isDark = preset === 'slate';
+      const isDark = ['slate', 'midnight', 'noir', 'cobalt'].includes(preset);
       const radial = context.createRadialGradient(
         width * .5, height * .42, Math.min(width, height) * .1,
         width * .5, height * .5, Math.max(width, height) * .72,
@@ -1953,12 +2147,32 @@
       radial.addColorStop(1, isDark ? 'rgba(0,0,0,.22)' : 'rgba(0,0,0,.05)');
       context.fillStyle = radial;
       context.fillRect(0, 0, width, height);
+      if (preset === 'concrete') {
+        context.fillStyle = 'rgba(67, 61, 54, .08)';
+        for (let index = 0; index < 180; index += 1) {
+          const x = (index * 83) % width;
+          const y = (index * 151) % height;
+          context.fillRect(x, y, 1.2, 1.2);
+        }
+      }
     } else if (preset !== 'studio') {
       context.fillStyle = 'rgba(255,247,222,.42)';
       context.beginPath();
       context.arc(width * .94, height * .16, width * .25, 0, Math.PI * 2);
       context.fill();
     }
+  }
+
+  function getBackgroundGradientPreview(preset, ratio = 'portrait') {
+    const key = `${preset}:${ratio}`;
+    if (backgroundGradientPreviewCache.has(key)) return backgroundGradientPreviewCache.get(key);
+    const canvas = document.createElement('canvas');
+    canvas.width = ratio === 'square' ? 280 : 180;
+    canvas.height = ratio === 'square' ? 280 : 320;
+    BackgroundGradients.draw(canvas.getContext('2d'), canvas.width, canvas.height, preset);
+    const url = canvas.toDataURL('image/jpeg', .9);
+    backgroundGradientPreviewCache.set(key, url);
+    return url;
   }
 
   function drawImageCover(context, image, width, height) {
@@ -2015,6 +2229,7 @@
     artworkContext.save();
     artworkContext.translate(width * overlay.x / 100, height * overlay.y / 100);
     artworkContext.rotate(overlay.rotation * Math.PI / 180);
+    artworkContext.filter = getArtworkImageFilter(overlay);
     artworkContext.globalAlpha = overlay.opacity;
     if (overlay.kind === 'embroidery') {
       artworkContext.shadowColor = 'rgba(35,35,30,.28)';
@@ -2176,7 +2391,7 @@
     updateMaskOverlay();
     scheduleFabricPreview();
     updateUndoRedoUI();
-    markDirty();
+    persistMaskMutation();
   }
 
   function redoMask() {
@@ -2189,7 +2404,7 @@
     updateMaskOverlay();
     scheduleFabricPreview();
     updateUndoRedoUI();
-    markDirty();
+    persistMaskMutation();
   }
 
   function updateUndoRedoUI() {
@@ -2213,6 +2428,7 @@
 
   // ── Pending mask assets: set during workspace restore, consumed by runFabricPreview
   let pendingMaskAssets = null;
+  let pendingMaskRestore = null;
 
   // ── Export per-overlay masks as PNG blobs for persistence
   async function getMaskBlobs() {
@@ -2221,15 +2437,19 @@
       // Bỏ qua mask còn nguyên (toàn trắng) — không có nét cọ nào.
       const data = entry.ctx.getImageData(0, 0, entry.canvas.width, entry.canvas.height).data;
       if (alphaAllWhite(data)) continue;
-      out[overlayId] = await new Promise((resolve) => {
+      const blob = await new Promise((resolve) => {
         entry.canvas.toBlob((blob) => resolve(blob), 'image/png');
       });
+      const asset = MaskAssets?.createMaskAsset(blob, entry.canvas.width, entry.canvas.height);
+      if (asset) out[overlayId] = asset;
     }
     return out;
   }
 
   // ── Restore one overlay's mask from a saved PNG blob
-  async function restoreMaskFromBlob(overlayId, blob, width, height, { skipSchedule = false } = {}) {
+  async function restoreMaskFromAsset(overlayId, asset, width, height, { skipSchedule = false } = {}) {
+    const normalized = MaskAssets?.normalizeMaskAsset(asset) || asset;
+    const blob = normalized?.blob || normalized;
     if (!blob || !overlayId) return;
     const url = URL.createObjectURL(blob);
     try {
@@ -2239,7 +2459,7 @@
         i.onerror = reject;
         i.src = url;
       });
-      const entry = ensureOverlayMask(overlayId, width || img.naturalWidth, height || img.naturalHeight);
+      const entry = ensureOverlayMask(overlayId, width || normalized?.width || img.naturalWidth, height || normalized?.height || img.naturalHeight);
       // Use 'copy' composite to replace mask content exactly, preserving alpha
       entry.ctx.globalCompositeOperation = 'copy';
       entry.ctx.drawImage(img, 0, 0, entry.canvas.width, entry.canvas.height);
@@ -2248,6 +2468,30 @@
     } finally {
       URL.revokeObjectURL(url);
     }
+  }
+
+  async function restorePendingMasks(width, height) {
+    if (!pendingMaskAssets) return false;
+    if (pendingMaskRestore) {
+      await pendingMaskRestore;
+      return true;
+    }
+    const assets = pendingMaskAssets;
+    pendingMaskRestore = (async () => {
+      for (const [overlayId, asset] of Object.entries(assets)) {
+        if (!Core.getOverlayById(scene, Number(overlayId))) continue;
+        await restoreMaskFromAsset(Number(overlayId), asset, width, height, { skipSchedule: true });
+      }
+    })();
+    try {
+      await pendingMaskRestore;
+    } finally {
+      pendingMaskRestore = null;
+    }
+    // Chỉ đánh dấu đã nạp sau khi tất cả ảnh mask nạp thành công. Nếu một lượt
+    // preview bị hủy giữa chừng, lần render tiếp theo vẫn còn dữ liệu để thử lại.
+    pendingMaskAssets = null;
+    return true;
   }
 
   function ensureFabricPreviewCanvas() {
@@ -2272,6 +2516,7 @@
   }
 
   function scheduleFabricPreview() {
+    if(workspaceBooting) return;
     if (fabricPreviewPending) return;
     fabricPreviewPending = true;
     requestAnimationFrame(runFabricPreview);
@@ -2417,17 +2662,9 @@
       ctx.clearRect(0, 0, W, H);
 
       // ── 6a. Restore pending per-overlay masks from saved workspace (once)
-      if (pendingMaskAssets) {
-        const assets = pendingMaskAssets;
-        pendingMaskAssets = null;
-        for (const [overlayId, blob] of Object.entries(assets)) {
-          if (!blob) continue;
-          // Bỏ qua mask của overlay không còn tồn tại trong scene.
-          if (!Core.getOverlayById(scene, Number(overlayId))) continue;
-          await restoreMaskFromBlob(Number(overlayId), blob, W, H, { skipSchedule: true });
-          if (abortId !== fabricPreviewAbort) return;
-        }
-      }
+      const restoredMasks = await restorePendingMasks(W, H);
+      if (restoredMasks) scheduleFabricPreview();
+      if (abortId !== fabricPreviewAbort) return;
 
       const strength = blendParams.dispStrength;
       const emboss = blendParams.emboss;
@@ -2461,6 +2698,7 @@
         artCtx.save();
         artCtx.translate(bW / 2, bH / 2);
         artCtx.rotate(angle);
+        artCtx.filter = getArtworkImageFilter(overlay);
         artCtx.drawImage(artImg, -overlaySize / 2, -artH / 2, overlaySize, artH);
         artCtx.restore();
 
@@ -2504,16 +2742,7 @@
             // ── Emboss: darken/lighten ONLY proportional to fold depth
             if (emboss > 0 && fold > 0.01) {
               const gLum = lum[gIdx];
-              const deviation = (gLum - 0.5) * fold * emboss * 1.4;
-              const factor = 1 + deviation;
-              dstD[dIdx]   = Math.min(255, Math.max(0, dstD[dIdx]   * factor));
-              dstD[dIdx+1] = Math.min(255, Math.max(0, dstD[dIdx+1] * factor));
-              dstD[dIdx+2] = Math.min(255, Math.max(0, dstD[dIdx+2] * factor));
-              // Also fade alpha at deep dark folds (artwork dips into crease)
-              if (gLum < 0.35) {
-                const fadeAmount = (0.35 - gLum) / 0.35 * fold * emboss;
-                dstD[dIdx+3] = Math.round(dstD[dIdx+3] * (1 - fadeAmount * 0.7));
-              }
+              FabricEngine.applyFoldLighting(dstD, gLum, fold, emboss, dIdx);
             }
           }
         }
@@ -2562,25 +2791,6 @@
         ctx.drawImage(artCanvas, artX, artY, bW, bH);
         ctx.restore();
 
-        // ── 8. Edge blend (radial vignette softens artwork edges into fabric)
-        if (blendParams.edgeBlend > 0.05) {
-          const vCanvas = document.createElement('canvas');
-          vCanvas.width = bW; vCanvas.height = bH;
-          const vc = vCanvas.getContext('2d');
-          const grd = vc.createRadialGradient(
-            bW/2, bH/2, Math.min(bW,bH)*0.3,
-            bW/2, bH/2, Math.max(bW,bH)*0.7
-          );
-          grd.addColorStop(0, 'rgba(0,0,0,0)');
-          grd.addColorStop(1, `rgba(0,0,0,${blendParams.edgeBlend * 0.6})`);
-          vc.fillStyle = grd;
-          vc.fillRect(0, 0, bW, bH);
-          ctx.save();
-          ctx.globalCompositeOperation = 'multiply';
-          ctx.globalAlpha = 0.7;
-          ctx.drawImage(vCanvas, artX, artY, bW, bH);
-          ctx.restore();
-        }
       }
 
       if (window.__logPreview) console.log('[preview] drew ' + overlays.length + ' overlays');
@@ -2608,11 +2818,10 @@
     if (!canvas) return;
     const token = ++_wmPreviewToken;
 
-    // Size the backing store to the artboard's displayed pixels (DPR-aware).
-    const rect = element.artboard.getBoundingClientRect();
+    // Use layout pixels; CSS zoom/ratio transitions must not distort text.
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const W = Math.max(1, Math.round(rect.width * dpr));
-    const H = Math.max(1, Math.round(rect.height * dpr));
+    const W = Math.max(1, Math.round(element.artboard.clientWidth * dpr));
+    const H = Math.max(1, Math.round(element.artboard.clientHeight * dpr));
     if (canvas.width !== W) canvas.width = W;
     if (canvas.height !== H) canvas.height = H;
 
@@ -2878,6 +3087,303 @@
   // Chọn nhiều lớp bằng Ctrl/Cmd + click: lưu "type:id" của mọi lớp đang chọn
   // (bao gồm cả lớp primary). Rỗng = chỉ chọn đơn qua scene.activeDecor.
   const multiSelectKeys = new Set();
+  let preserveFolderList = false;
+  let workspaceTool = 'select', workspaceToolPanel = null;
+
+  function syncWorkspaceTools() {
+    if(!workspaceToolPanel) return;
+    const active=brushState.active ? brushState.mode : workspaceTool;
+    workspaceToolPanel.querySelectorAll('[data-workspace-tool]').forEach(button=>{
+      const selected=button.dataset.workspaceTool===active;
+      button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));
+    });
+    element.stageWell.dataset.tool=selectionSpace || active==='hand'?'hand':active;
+  }
+
+  function activateWorkspaceTool(tool) {
+    if(['erase','blur','restore'].includes(tool)) {
+      workspaceTool='select';brushState.mode=tool;setBrushActive(true);syncBrushUI();
+    } else {
+      if(brushState.active) setBrushActive(false);
+      workspaceTool=tool;
+      if(tool==='text') {workspaceTool='select';addTextToScene();}
+      if(tool==='icon') {workspaceTool='select';addIconToScene();}
+      if(tool==='hand') deselectAllSelections();
+    }
+    syncWorkspaceTools();render();
+  }
+
+  function attachWorkspaceTools() {
+    workspaceToolPanel=document.createElement('div');workspaceToolPanel.className='workspace-tools';
+    workspaceToolPanel.setAttribute('role','toolbar');workspaceToolPanel.setAttribute('aria-label','Công cụ workspace');
+    const definitions=[
+      ['select','Chọn / di chuyển layer (V)','M5 3v16l4-5 5 5 3-3-5-5 6-2Z'],
+      ['marquee','Quét chọn nhiều layer (M)','M4 8V4h4m8 0h4v4m0 8v4h-4m-8 0H4v-4M4 11v2m16-2v2M11 4h2m-2 16h2'],
+      ['hand','Bàn tay — kéo workspace (H / Space)','M8 12V6a2 2 0 0 1 4 0v5-7a2 2 0 0 1 4 0v7-4a2 2 0 0 1 4 0v8c0 4-3 6-7 6-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 2Z'],
+      ['text','Thêm chữ (T)','M4 5h16M12 5v15M8 20h8'],
+      ['icon','Thêm icon (I)','m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1Z'],
+      ['erase','Cọ xoá artwork (E)','m4 13 9-10 8 7-9 11H8l-4-4Zm3-3 8 8M12 21h9'],
+      ['blur','Cọ làm mờ artwork (B)','M12 3C9 8 5 11 5 15a7 7 0 0 0 14 0c0-4-4-7-7-12ZM8 15c0 3 2 4 4 4'],
+      ['restore','Cọ khôi phục artwork (R)','M5 8a8 8 0 1 1-1 8M5 3v5h5M12 10v6m-3-3h6'],
+    ];
+    for(const [tool,label,path] of definitions) {
+      const button=document.createElement('button');button.type='button';button.dataset.workspaceTool=tool;
+      button.title=label;button.setAttribute('aria-label',label);
+      button.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`;
+      button.addEventListener('click',()=>activateWorkspaceTool(tool));workspaceToolPanel.appendChild(button);
+    }
+    element.stageWell.parentElement.appendChild(workspaceToolPanel);
+    window.addEventListener('keydown',event=>{
+      if(event.ctrlKey||event.metaKey||event.altKey||event.repeat||event.target.closest?.('input,textarea,select,[contenteditable="true"]')||inlineTextEdit||selectionGesture) return;
+      const tool={v:'select',m:'marquee',h:'hand',t:'text',i:'icon',e:'erase',b:'blur',r:'restore'}[event.key.toLowerCase()];
+      if(tool){event.preventDefault();activateWorkspaceTool(tool);}
+    });
+    syncWorkspaceTools();
+  }
+  let groupFrame = null, marqueeBox = null, selectionGesture = null, selectionSpace = false;
+  let selectionClickUntil = 0;
+
+  function selectableLayers() {
+    return [...Core.getTextItems(scene), ...Core.getIconItems(scene),
+      ...Core.getOverlays(scene).map(item => ({...item,type:'artwork'}))]
+      .filter(item => !item.hidden && !item.locked);
+  }
+
+  function layerBounds(item) {
+    if (item.type !== 'artwork') return decorBounds(item);
+    const node = item.id === scene.activeOverlayId ? element.artworkOverlay : _overlayNodes.get(item.id);
+    if (!node) return {left:item.x,right:item.x,top:item.y,bottom:item.y};
+    const rect = element.artboard.getBoundingClientRect(), b = node.getBoundingClientRect();
+    return {left:(b.left-rect.left)/rect.width*100,right:(b.right-rect.left)/rect.width*100,
+      top:(b.top-rect.top)/rect.height*100,bottom:(b.bottom-rect.top)/rect.height*100};
+  }
+
+  function selectedLayers() {
+    return selectableLayers().filter(item => multiSelectKeys.has(`${item.type}:${item.id}`));
+  }
+
+  function setLayerSelection(keys) {
+    multiSelectKeys.clear();
+    keys.forEach(key => multiSelectKeys.add(key));
+    const items = selectedLayers();
+    const decor = items.find(item => item.type !== 'artwork');
+    scene = Core.selectDecor(scene, decor ? {type:decor.type,id:decor.id} : null);
+    baseSelected = false;
+    artworkSelected = false;
+  }
+
+  function selectListLayers(keys,event,keepFolderNodes=false) {
+    let current=new Set(multiSelectKeys);
+    if(!current.size) {
+      if(scene.activeDecor) current.add(`${scene.activeDecor.type}:${scene.activeDecor.id}`);
+      else if(artworkSelected && scene.activeOverlayId!=null) current.add(`artwork:${scene.activeOverlayId}`);
+    }
+    const next=event.ctrlKey || event.metaKey
+      ? FormSelectionGeometry.toggleSelection(current,keys) : new Set(keys);
+    setLayerSelection(next);
+    if(next.size===1) {
+      const [type,id]=[...next][0].split(':');
+      if(type==='artwork') {scene=Core.selectOverlayById(scene,Number(id));artworkSelected=true;}
+      else scene=Core.selectDecor(scene,{type,id:Number(id)});
+    }
+    preserveFolderList=keepFolderNodes;
+    try {render();} finally {preserveFolderList=false;}
+    if(keepFolderNodes) {
+      element.decorList.querySelectorAll('[data-folder]').forEach(folder=>{
+        const group=(scene.layerGroups||[]).find(g=>g.id===folder.dataset.folder);
+        folder.classList.toggle('is-selected',Boolean(group?.keys.length && group.keys.every(key=>next.has(key))));
+      });
+      element.decorList.querySelectorAll('[data-decor-row]').forEach(row=>row.classList.toggle('active',next.has(row.dataset.decorRow)));
+      element.decorList.querySelectorAll('[data-folder-artwork]').forEach(row=>row.classList.toggle('active',next.has(`artwork:${row.dataset.folderArtwork}`)));
+    }
+  }
+
+  function expandLayerGroups(keys) {
+    const result = new Set(keys);
+    const groups = (scene.layerGroups || []).filter(g => g.side === scene.view);
+    const legacy = new Map();
+    for (const item of selectableLayers()) if (item.groupId && item.type !== 'artwork') {
+      if (!legacy.has(item.groupId)) legacy.set(item.groupId,[]);
+      legacy.get(item.groupId).push(`${item.type}:${item.id}`);
+    }
+    for (const group of [...groups,...[...legacy.values()].map(keys=>({keys}))]) {
+      if (group.keys.some(key => result.has(key))) group.keys.forEach(key => result.add(key));
+    }
+    return result;
+  }
+
+  function syncGroupSelection() {
+    if (!groupFrame) {
+      groupFrame = document.createElement('div');
+      groupFrame.className = 'workspace-group hidden';
+      for (const corner of ['nw','ne','sw','se']) {
+        const handle=document.createElement('button');
+        handle.type='button'; handle.dataset.groupCorner=corner;
+        handle.className=`workspace-group-handle ${corner}`;
+        handle.setAttribute('aria-label',`Đổi kích thước nhóm từ góc ${corner}`);
+        groupFrame.appendChild(handle);
+      }
+      const bar=document.createElement('div'); bar.className='workspace-group-bar';
+      for (const [action,label] of [['move','Kéo nhóm'],['group','Nhóm'],['ungroup','Tách nhóm']]) {
+        const button=document.createElement('button');button.type='button';button.dataset.groupAction=action;button.textContent=label;bar.appendChild(button);
+      }
+      bar.addEventListener('click',event=>{
+        const action=event.target.dataset.groupAction;
+        event.stopPropagation();
+        if(action==='group') groupSelected();
+        if(action==='ungroup') ungroupSelected();
+      });
+      groupFrame.appendChild(bar);
+      element.artboard.appendChild(groupFrame);
+    }
+    const items=selectedLayers();
+    const box=FormSelectionGeometry.union(items.map(layerBounds));
+    const visible=items.length>1 && !brushState.active && !inlineTextEdit;
+    groupFrame.classList.toggle('hidden',!visible);
+    element.artboard.classList.toggle('has-group-selection',visible);
+    if(visible) Object.assign(groupFrame.style,{left:`${box.left}%`,top:`${box.top}%`,width:`${box.right-box.left}%`,height:`${box.bottom-box.top}%`});
+    for(const item of Core.getOverlays(scene)) {
+      const node=item.id===scene.activeOverlayId?element.artworkOverlay:_overlayNodes.get(item.id);
+      node?.classList.toggle('multi-selected',multiSelectKeys.has(`artwork:${item.id}`));
+    }
+  }
+
+  function attachMarqueeSelection() {
+    const G=FormSelectionGeometry;
+    element.stageWell.title='V: chọn layer · M: quét vùng · H hoặc Space + kéo: bàn tay · Ctrl+G: nhóm · Ctrl+Shift+G: bỏ nhóm';
+    const editable=target=>target?.closest?.('input,textarea,select,[contenteditable="true"]');
+    window.addEventListener('keydown',event=>{ if(event.code==='Space' && !editable(event.target)) {selectionSpace=true;syncWorkspaceTools();event.preventDefault();} });
+    window.addEventListener('keyup',event=>{if(event.code==='Space') {selectionSpace=false;syncWorkspaceTools();}});
+    window.addEventListener('blur',()=>{selectionSpace=false;syncWorkspaceTools();finishSelectionGesture(null,true);});
+    element.stageWell.addEventListener('click',event=>{
+      if(Date.now()<selectionClickUntil && !event.target.closest('[data-group-action]')) {event.preventDefault();event.stopImmediatePropagation();}
+    },true);
+    element.stageWell.addEventListener('pointerdown',event=>{
+      const mode=G.pointerMode(workspaceTool,selectionSpace,brushState.active);
+      if(mode==='brush' || event.button!==0 || editable(event.target)) return;
+      const target=event.target;
+      const rect=element.artboard.getBoundingClientRect();
+      const corner=target.dataset.groupCorner;
+      const action=target.dataset.groupAction;
+      if(action && action!=='move') {event.stopPropagation();return;}
+      const hit=target.closest('.decor-hit,.artwork-overlay');
+      let key=null;
+      if(hit?.classList.contains('decor-hit')) key=`${hit.dataset.decorType}:${hit.dataset.decorId}`;
+      else if(hit) key=`artwork:${hit.dataset.overlayId || scene.activeOverlayId}`;
+      const valid=new Set(selectableLayers().map(item=>`${item.type}:${item.id}`));
+      if(mode==='pan') {
+        selectionGesture={kind:'pan',id:event.pointerId,start:{x:event.clientX,y:event.clientY},pan:{...workspaceView}};
+      } else if(key && valid.has(key) && (event.ctrlKey || event.metaKey)) {
+        const keys=new Set(multiSelectKeys);
+        if(!keys.size) {
+          if(scene.activeDecor) keys.add(`${scene.activeDecor.type}:${scene.activeDecor.id}`);
+          else if(artworkSelected && scene.activeOverlayId!=null) keys.add(`artwork:${scene.activeOverlayId}`);
+        }
+        const expanded=expandLayerGroups([key]);
+        setLayerSelection(FormSelectionGeometry.toggleSelection(keys,expanded));render();selectionClickUntil=Date.now()+300;
+        event.preventDefault();event.stopImmediatePropagation();return;
+      } else {
+        if(key && valid.has(key) && !corner && !action) {
+          const expanded=expandLayerGroups([key]);
+          if(!multiSelectKeys.has(key)) {
+            if(expanded.size>1) setLayerSelection(expanded);
+            else {multiSelectKeys.clear();render();return;}
+          }
+        }
+        const items=selectedLayers();
+        if(corner || action==='move' || (key && multiSelectKeys.has(key) && items.length>1 && !target.closest('.decor-handle,.artwork-transform'))) {
+          if(items.length<2) return;
+          const boxes=items.map(item=>{const b=layerBounds(item);return {left:b.left*rect.width/100,right:b.right*rect.width/100,top:b.top*rect.height/100,bottom:b.bottom*rect.height/100};});
+          const limits={min:0,max:Infinity};
+          for(const item of items) {
+            const value=item.type==='text'?item.fontSize:item.type==='icon'?item.size:item.scale;
+            const min=item.type==='text'?Core.MIN_TEXT_FONT_SIZE:item.type==='icon'?Core.MIN_ICON_SIZE:.1;
+            const max=item.type==='text'?Core.MAX_TEXT_FONT_SIZE:item.type==='icon'?Core.MAX_ICON_SIZE:3.2;
+            limits.min=Math.max(limits.min,min/value);limits.max=Math.min(limits.max,max/value);
+          }
+          selectionGesture={kind:corner?'resize':'move',corner,items:items.map(item=>({...item})),box:G.union(boxes),limits,rect,id:event.pointerId,start:{x:event.clientX,y:event.clientY},original:scene};
+          render();
+        } else {
+          if(target.closest('.decor-hit,.artwork-overlay,.logo-overlay,.base-selection,.safe-area')) return;
+          if(target===element.baseImage && !baseLocked && isClickOnBaseContent(event)) return;
+          if(mode!=='marquee') {
+            deselectAllSelections();event.preventDefault();event.stopImmediatePropagation();return;
+          }
+          if(inlineTextEdit) finishInlineTextEdit(false);
+          selectionGesture={kind:'marquee',id:event.pointerId,start:{x:event.clientX,y:event.clientY},rect,initial:new Set(multiSelectKeys),add:event.ctrlKey||event.metaKey};
+          if(!marqueeBox){marqueeBox=document.createElement('div');marqueeBox.className='workspace-marquee';element.stageWell.appendChild(marqueeBox);}
+        }
+      }
+      element.stageWell.setPointerCapture(event.pointerId);
+      event.preventDefault();event.stopImmediatePropagation();
+    },true);
+    window.addEventListener('pointermove',event=>{
+      const g=selectionGesture;if(!g || g.id!==event.pointerId) return;
+      const dx=event.clientX-g.start.x,dy=event.clientY-g.start.y;
+      if(Math.hypot(dx,dy)>3) g.moved=true;
+      if(!g.moved) return;
+      if(g.kind==='pan'){element.stageWell.classList.add('panning');setWorkspaceView({panX:g.pan.panX+dx,panY:g.pan.panY+dy});return;}
+      if(g.kind==='marquee') {
+        const box=G.rectangle(g.start,{x:event.clientX,y:event.clientY},event.shiftKey);
+        const stage=element.stageWell.getBoundingClientRect();
+        Object.assign(marqueeBox.style,{display:'block',left:`${box.left-stage.left}px`,top:`${box.top-stage.top}px`,width:`${box.right-box.left}px`,height:`${box.bottom-box.top}px`});
+        const selection={left:(box.left-g.rect.left)/g.rect.width*100,right:(box.right-g.rect.left)/g.rect.width*100,top:(box.top-g.rect.top)/g.rect.height*100,bottom:(box.bottom-g.rect.top)/g.rect.height*100};
+        const keys=g.add?new Set(g.initial):new Set();
+        selectableLayers().filter(item=>G.contains(selection,layerBounds(item))).forEach(item=>keys.add(`${item.type}:${item.id}`));
+        setLayerSelection(expandLayerGroups(keys));render();return;
+      }
+      let scale=1,anchor={x:0,y:0};
+      if(g.kind==='resize') ({scale,anchor}=G.resize(g.box,g.corner,{x:event.clientX-g.rect.left,y:event.clientY-g.rect.top},g.limits));
+      let moveX=dx/g.rect.width*100,moveY=dy/g.rect.height*100;
+      if(g.kind==='move') {
+        let minX=-Infinity,maxX=Infinity,minY=-Infinity,maxY=Infinity;
+        for(const item of g.items) {
+          const mx=item.type==='artwork'?20.5*item.scale/2:3;
+          const my=item.type==='artwork'?(20.5/1.19)*item.scale/2:3;
+          minX=Math.max(minX,mx-item.x);maxX=Math.min(maxX,100-mx-item.x);
+          minY=Math.max(minY,my-item.y);maxY=Math.min(maxY,100-my-item.y);
+        }
+        moveX=Math.max(minX,Math.min(maxX,moveX));moveY=Math.max(minY,Math.min(maxY,moveY));
+      } else {
+        // Keep one common scale; never clamp members independently at the canvas edge.
+        let maximum=g.limits.max;
+        for(const item of g.items) {
+          for(const [axis,extent] of [['x',g.rect.width],['y',g.rect.height]]) {
+            const a=anchor[axis]/extent*100,d=item[axis]-a;
+            const margin=item.type==='artwork'?0:3;
+            const growth=item.type==='artwork'?(axis==='x'?20.5:20.5/1.19)*item.scale/2:0;
+            if(d-growth<0) maximum=Math.min(maximum,(a-margin)/(growth-d));
+            if(d+growth>0) maximum=Math.min(maximum,(100-margin-a)/(d+growth));
+          }
+        }
+        scale=Math.max(g.limits.min,Math.min(maximum,scale));
+      }
+      for(const item of g.items) {
+        const patch={x:g.kind==='move'?item.x+moveX:(anchor.x+(item.x*g.rect.width/100-anchor.x)*scale)/g.rect.width*100,
+          y:g.kind==='move'?item.y+moveY:(anchor.y+(item.y*g.rect.height/100-anchor.y)*scale)/g.rect.height*100};
+        if(g.kind==='resize') patch[item.type==='text'?'fontSize':item.type==='icon'?'size':'scale']=(item.type==='text'?item.fontSize:item.type==='icon'?item.size:item.scale)*scale;
+        if(item.type==='text') scene=Core.updateTextItem(scene,patch,item.id);
+        else if(item.type==='icon') scene=Core.updateIconItem(scene,patch,item.id);
+        else scene=Core.updateDirectOverlay(scene,patch,item.id);
+      }
+      markDirty();render();
+    });
+    function finishSelectionGesture(event,cancel=false) {
+      const g=selectionGesture;if(!g || (event && event.pointerId!==g.id)) return;
+      selectionGesture=null;
+      element.stageWell.classList.remove('panning');
+      if(marqueeBox) marqueeBox.style.display='none';
+      if(cancel){if(g.original) scene=g.original;if(g.initial) setLayerSelection(g.initial);}
+      else if(g.kind==='marquee' && !g.moved && !g.add) setLayerSelection([]);
+      if(element.stageWell.hasPointerCapture(g.id)) element.stageWell.releasePointerCapture(g.id);
+      selectionClickUntil=Date.now()+350;
+      if(g.moved && g.kind!=='pan') markDirty();
+      render();
+    }
+    window.addEventListener('pointerup',event=>finishSelectionGesture(event));
+    window.addEventListener('pointercancel',event=>finishSelectionGesture(event,true));
+    window.addEventListener('keydown',event=>{if(event.key==='Escape' && selectionGesture){finishSelectionGesture(null,true);event.stopImmediatePropagation();}},true);
+  }
 
   const decorKeyOf = (selection) => (selection ? `${selection.type}:${selection.id}` : null);
 
@@ -2899,7 +3405,7 @@
   function pruneMultiSelect() {
     if (!multiSelectKeys.size) return;
     const valid = new Set(
-      [...Core.getTextItems(scene), ...Core.getIconItems(scene)]
+      [...Core.getTextItems(scene), ...Core.getIconItems(scene), ...Core.getOverlays(scene).map(item=>({...item,type:'artwork'}))]
         .map((item) => `${item.type}:${item.id}`),
     );
     for (const key of [...multiSelectKeys]) {
@@ -2991,7 +3497,39 @@
   }
 
   // Ngưỡng hút snap khi kéo (theo % kích thước artboard).
-  const DECOR_SNAP_THRESHOLD = 1.2;
+  const DECOR_SNAP_THRESHOLD = 6; // screen pixels, independent of workspace zoom
+  let decorMeasurements = null;
+
+  function decorBounds(item) {
+    const raw = measureDecorBox(item);
+    const box = decorBoxToPercent(rotatedHitBox(raw.w, raw.h, item.rotation), artboardAspectRatio());
+    return { left: item.x - box.wPct / 2, right: item.x + box.wPct / 2,
+      top: item.y - box.hPct / 2, bottom: item.y + box.hPct / 2 };
+  }
+
+  function displayDecorDistances(box, targets) {
+    if (!decorMeasurements) {
+      decorMeasurements = document.createElement('div');
+      decorMeasurements.className = 'decor-measurements';
+      decorMeasurements.setAttribute('aria-hidden', 'true');
+      element.artboard.appendChild(decorMeasurements);
+    }
+    decorMeasurements.replaceChildren();
+    if (!box) return;
+    for (const gap of FormDecorLayout.gaps(box, targets)) {
+      const line = document.createElement('div');
+      line.className = `decor-distance decor-distance-${gap.axis}`;
+      const horizontal = gap.axis === 'x';
+      line.style.left = `${horizontal ? gap.from : gap.cross}%`;
+      line.style.top = `${horizontal ? gap.cross : gap.from}%`;
+      line.style[horizontal ? 'width' : 'height'] = `${gap.distance}%`;
+      const label = document.createElement('span');
+      const units = gap.distance * DECOR_REFERENCE_WIDTH / 100 / (horizontal ? 1 : artboardAspectRatio());
+      label.textContent = `${Math.round(units * 10) / 10} đv`;
+      line.appendChild(label);
+      decorMeasurements.appendChild(line);
+    }
+  }
 
   function ensureDecorLayers() {
     if (!decorCanvas) {
@@ -3025,10 +3563,7 @@
         event.stopPropagation();
         const selection = scene.activeDecor;
         if (!selection) return;
-        scene = Core.duplicateDecorItem(scene, selection.type, selection.id);
-        markDirty();
-        render();
-        showToast('Đã nhân bản lớp — bản copy đang được chọn.');
+        duplicateWorkspaceLayers([`${selection.type}:${selection.id}`]);
       });
       const deleteButton = document.createElement('button');
       deleteButton.type = 'button';
@@ -3070,6 +3605,22 @@
     }
     // Nới nhẹ một khoảng đệm để vùng bấm thoải mái hơn.
     return { w: Math.max(width + item.fontSize * .15, item.fontSize * .8), h: Math.max(height, item.fontSize) };
+  }
+
+  function anchoredTextContentPatch(item, content) {
+    const previousWidth = measureDecorBox(item).w;
+    const nextWidth = measureDecorBox({ ...item, content }).w;
+    return {
+      content,
+      ...FormDecorLayout.anchorTextLeft(item, previousWidth, nextWidth, artboardAspectRatio()),
+    };
+  }
+
+  function updateTextContentAnchored(id, content) {
+    const item = Core.findDecorItem(scene, 'text', id);
+    if (!item) return null;
+    scene = Core.updateTextItem(scene, anchoredTextContentPatch(item, content), id);
+    return Core.findDecorItem(scene, 'text', id);
   }
 
   function rotatedHitBox(width, height, rotationDeg) {
@@ -3145,23 +3696,28 @@
     if (!decorCanvas) return;
     decorPreviewPending = false;
     const token = ++decorPreviewToken;
-    const rect = element.artboard.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const W = Math.max(1, Math.round(rect.width * dpr));
-    const H = Math.max(1, Math.round(rect.height * dpr));
-    if (decorCanvas.width !== W) decorCanvas.width = W;
-    if (decorCanvas.height !== H) decorCanvas.height = H;
-    decorCtx.clearRect(0, 0, W, H);
+    const W = Math.max(1, Math.round(element.artboard.clientWidth * dpr));
+    const H = Math.max(1, Math.round(element.artboard.clientHeight * dpr));
+    const buffer=document.createElement('canvas');
+    buffer.width=W;buffer.height=H;
+    const context=buffer.getContext('2d');
 
     const items = [...Core.getTextItems(scene), ...Core.getIconItems(scene)]
       .filter((item) => !item.hidden);
     for (const item of items) {
-      await drawDecorItem(decorCtx, W, H, item);
+      await drawDecorItem(context, W, H, item);
       if (token !== decorPreviewToken) return;
     }
+    if (token !== decorPreviewToken) return;
+    if (decorCanvas.width !== W) decorCanvas.width = W;
+    if (decorCanvas.height !== H) decorCanvas.height = H;
+    decorCtx.clearRect(0, 0, W, H);
+    decorCtx.drawImage(buffer,0,0);
   }
 
   function scheduleDecorPreview() {
+    if(workspaceBooting) return;
     if (decorPreviewPending) return;
     decorPreviewPending = true;
     requestAnimationFrame(() => { void runDecorPreview(); });
@@ -3274,6 +3830,11 @@
           .map((member) => `${member.type}:${member.id}`),
       );
     }
+    if (moveKeys) moveKeys = new Set([...moveKeys].filter((key) => {
+      const [memberType, memberId] = key.split(':');
+      const member = Core.findDecorItem(scene, memberType, Number(memberId));
+      return member && !member.locked && !member.hidden;
+    }));
     decorDrag = {
       pointerId: event.pointerId,
       type,
@@ -3321,23 +3882,28 @@
     let x = decorDrag.x + ((event.clientX - decorDrag.startX) / decorDrag.rect.width) * 100;
     let y = decorDrag.y + ((event.clientY - decorDrag.startY) / decorDrag.rect.height) * 100;
     // Snap: hút về đường ngang/dọc mốc gần nhất và hiển thị guide line.
-    const targets = collectDecorSnapTargets(`${decorDrag.type}:${decorDrag.id}`);
-    let guideV = null;
-    let guideH = null;
-    for (const targetX of targets.xs) {
-      if (Math.abs(x - targetX) <= DECOR_SNAP_THRESHOLD) { x = targetX; guideV = targetX; break; }
-    }
-    for (const targetY of targets.ys) {
-      if (Math.abs(y - targetY) <= DECOR_SNAP_THRESHOLD) { y = targetY; guideH = targetY; break; }
-    }
-    showDecorGuides(guideV, guideH);
+    const movingKeys = decorDrag.groupStart ? new Set(decorDrag.groupStart.keys()) : new Set([`${decorDrag.type}:${decorDrag.id}`]);
+    const allItems = [...Core.getTextItems(scene), ...Core.getIconItems(scene)];
+    const targets = allItems.filter((item) => !item.hidden && !movingKeys.has(`${item.type}:${item.id}`)).map(decorBounds);
+    const moving = allItems.filter((item) => movingKeys.has(`${item.type}:${item.id}`)).map((item) => {
+      const start = decorDrag.groupStart?.get(`${item.type}:${item.id}`) || decorDrag;
+      return decorBounds({ ...item, x: start.x + x - decorDrag.x, y: start.y + y - decorDrag.y });
+    });
+    const box = { left: Math.min(...moving.map(b => b.left)), right: Math.max(...moving.map(b => b.right)),
+      top: Math.min(...moving.map(b => b.top)), bottom: Math.max(...moving.map(b => b.bottom)) };
+    const snap = event.altKey ? { dx: 0, dy: 0, v: null, h: null } : FormDecorLayout.snap(box,
+      [...targets, {left:0,right:100,top:0,bottom:100}],
+      DECOR_SNAP_THRESHOLD / decorDrag.rect.width * 100, DECOR_SNAP_THRESHOLD / decorDrag.rect.height * 100);
+    x += snap.dx; y += snap.dy;
+    showDecorGuides(snap.v, snap.h);
+    displayDecorDistances({left:box.left+snap.dx,right:box.right+snap.dx,top:box.top+snap.dy,bottom:box.bottom+snap.dy}, targets);
     scene = decorDrag.type === 'text'
       ? Core.updateTextItem(scene, { x, y }, decorDrag.id)
       : Core.updateIconItem(scene, { x, y }, decorDrag.id);
     // Kéo nhóm: mọi lớp đang chọn dịch cùng một khoảng so với vị trí bắt đầu.
     const deltaX = x - decorDrag.x;
     const deltaY = y - decorDrag.y;
-    if (decorDrag.groupStart && (deltaX || deltaY)) {
+    if (decorDrag.groupStart) {
       const draggedKey = `${decorDrag.type}:${decorDrag.id}`;
       for (const [key, start] of decorDrag.groupStart) {
         if (key === draggedKey) continue;
@@ -3358,6 +3924,7 @@
     if (node?.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
     decorDrag = null;
     showDecorGuides(null, null);
+    displayDecorDistances(null, []);
   };
   window.addEventListener('pointerup', stopDecorDrag);
   window.addEventListener('pointercancel', stopDecorDrag);
@@ -3442,8 +4009,15 @@
     input.style.width = `${Math.max(_decorMeasureCtx.measureText(input.value).width + 28, cssSize * 2)}px`;
     input.style.transform = `translate(-50%, -50%) rotate(${item.rotation}deg)`;
 
+    const syncInlineGeometry = (current) => {
+      input.style.left = `${current.x}%`;
+      input.style.top = `${current.y}%`;
+      _decorMeasureCtx.font = fontStringForDecor(current, cssSize);
+      input.style.width = `${Math.max(_decorMeasureCtx.measureText(input.value).width + 28, cssSize * 2)}px`;
+    };
     input.addEventListener('input', () => {
-      scene = Core.updateTextItem(scene, { content: input.value }, item.id);
+      const current = updateTextContentAnchored(item.id, input.value);
+      if (current) syncInlineGeometry(current);
       markDirty();
       render();
     });
@@ -3461,7 +4035,14 @@
     input.addEventListener('blur', () => finishInlineTextEdit(false));
 
     decorHitLayer.appendChild(input);
-    inlineTextEdit = { input, id: item.id, type: 'text', original: String(item.content || '') };
+    inlineTextEdit = {
+      input,
+      id: item.id,
+      type: 'text',
+      original: String(item.content || ''),
+      originalX: item.x,
+      originalY: item.y,
+    };
     // Vẽ lại để ẩn hit-node và action bar của lớp đang sửa.
     render();
     requestAnimationFrame(() => {
@@ -3475,7 +4056,11 @@
     if (!editing) return;
     inlineTextEdit = null;
     if (revert) {
-      scene = Core.updateTextItem(scene, { content: editing.original }, editing.id);
+      scene = Core.updateTextItem(scene, {
+        content: editing.original,
+        x: editing.originalX,
+        y: editing.originalY,
+      }, editing.id);
     }
     editing.input.remove();
     markDirty();
@@ -3502,7 +4087,7 @@
       } else {
         drawPresetBackground(context, width, height, scene.background.value);
       }
-      const baseImage = await loadImage(scene.base.src);
+      const baseImage = await loadImage(getBaseEffectiveSrc(scene));
       drawImageContain(context, baseImage, width, height, scene.baseTransform);
 
       // Draw ALL overlays for the current view (bỏ lớp bị ẩn)
@@ -3673,7 +4258,7 @@
     setMessage(element.chromaMessage, `Đang khử nền ${label}…`);
     try {
       // force: ép khử theo màu nền viền dù ngưỡng tự động không đạt.
-      const { blob, changed } = await ChromaKey.processBlob(sourceBlob, { mode, force: true });
+      const { blob, changed } = await ChromaKey.processBlob(sourceBlob, { mode, force: true, shadowGreen: true });
       if (!changed) {
         setMessage(element.chromaMessage, `Không phát hiện nền ${label} rõ ràng trên ảnh này.`, 'error');
         return;
@@ -3730,7 +4315,10 @@
     buttons.forEach((button) => { if (button) button.disabled = true; });
     setMessage(target, `Đang khử nền ${BASE_CHROMA_LABEL[mode] || mode}…`);
     try {
-      const { blob, changed, mode: used } = await ChromaKey.processBlob(asset.blob, {
+      const greenSourceBlob = mode === 'green'
+        ? ChromaKey.greenSource(asset, libraryEntries.find((entry) => entry.id === currentLibraryBaseId))
+        : null;
+      const { blob, changed, mode: used } = await ChromaKey.processBlob(greenSourceBlob || asset.blob, {
         mode,
         force: mode !== 'auto',
       });
@@ -3748,7 +4336,7 @@
       scene = { ...scene, base: { ...scene.base, src: newSrc, name: newName } };
       revokeLater(fileUrls.base);
       fileUrls.base = newSrc;
-      fileBlobs.base = { blob, name: newName, metadata: asset.metadata };
+      fileBlobs.base = { blob, name: newName, metadata: asset.metadata, greenSourceBlob };
       garmentDispCache = null;
       if (oldSrc) _imageCache.delete(oldSrc);
       markDirty();
@@ -3836,8 +4424,11 @@
   function updateActiveDecor(patch) {
     const selection = scene.activeDecor;
     if (!selection) return;
+    const textPatch = selection.type === 'text' && Object.prototype.hasOwnProperty.call(patch, 'content')
+      ? anchoredTextContentPatch(Core.findDecorItem(scene, 'text', selection.id), patch.content)
+      : patch;
     scene = selection.type === 'text'
-      ? Core.updateTextItem(scene, patch, selection.id)
+      ? Core.updateTextItem(scene, textPatch, selection.id)
       : Core.updateIconItem(scene, patch, selection.id);
     markDirty();
     render();
@@ -3880,11 +4471,13 @@
   }
 
   function renderDecorList(texts, icons, selection) {
+    if(preserveFolderList) return;
+    if(element.decorList.querySelector('.layer-folder-name') === document.activeElement) return;
     const rows = [
       ...texts.map((item) => ({ type: 'text', item })),
       ...icons.map((item) => ({ type: 'icon', item })),
     ];
-    let html = '';
+    const rowHtml = new Map();
     for (const { type, item } of rows) {
       const isActive = isDecorItemSelected(item);
       const thumb = type === 'text'
@@ -3892,25 +4485,101 @@
         : `<img src="${Icons.getSrc(item.iconId, item.color)}" alt="" />`;
       const title = type === 'text' ? (item.content || '(trống)').slice(0, 22) : (Icons.has(item.iconId) ? item.iconId : '?');
       const eyeSvg = '<svg viewBox="0 0 16 16"><path d="M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.5"/></svg>';
-      html += `<div class="artwork-list-item${isActive ? ' active' : ''}${item.locked ? ' locked' : ''}${item.hidden ? ' hidden-layer' : ''}" data-decor-row="${type}:${item.id}">`
+      rowHtml.set(`${type}:${item.id}`, `<div class="artwork-list-item${isActive ? ' active' : ''}${item.locked ? ' locked' : ''}${item.hidden ? ' hidden-layer' : ''}" data-decor-row="${type}:${item.id}">`
         + `<button class="artwork-item-eye${item.hidden ? ' is-hidden' : ''}" data-decor-eye="${type}:${item.id}" type="button" title="${item.hidden ? 'Hiện layer' : 'Ẩn layer'}">${eyeSvg}</button>`
         + `<div class="decor-item-thumb">${thumb}</div>`
         + `<div class="artwork-item-info"><span class="artwork-item-name">${escapeHtml(title)}</span>`
         + `<span class="artwork-item-meta">${type === 'text' ? `${item.font} · ${item.fontSize}px` : 'Icon'}${item.groupId ? ' · 🔗 Nhóm' : ''}${item.locked ? ' · 🔒' : ''}</span></div>`
         + `<button class="artwork-item-lock" data-decor-lock="${type}:${item.id}" type="button" title="${item.locked ? 'Mở khóa' : 'Khóa'}">${item.locked ? '🔒' : '🔓'}</button>`
         + `<button class="artwork-item-remove" data-decor-remove="${type}:${item.id}" type="button" title="Xóa">✕</button>`
-        + `</div>`;
+        + `<button class="artwork-item-lock" data-decor-duplicate="${type}:${item.id}" type="button" title="Duplicate layer" aria-label="Duplicate layer">⧉</button>`
+        + `</div>`);
     }
+    let html='';
+    const grouped=new Set();
+    for(const group of (scene.layerGroups || []).filter(g=>g.side===scene.view)) {
+      const keys=group.keys.filter(key=>rowHtml.has(key) || (key.startsWith('artwork:') && Core.getOverlayById(scene,Number(key.split(':')[1]))));
+      if(keys.length<2) continue;
+      const id=escapeHtml(group.id),name=escapeHtml(group.name || 'Nhóm');
+      const active=keys.every(key=>multiSelectKeys.has(key));
+      const hidden=Core.isLayerGroupHidden(scene,group.id);
+      html+=`<section class="layer-folder${active?' is-selected':''}" data-folder="${id}"><div class="layer-folder-header">`
+        +`<button type="button" class="folder-eye${hidden?' is-hidden':''}" data-folder-eye="${id}" aria-label="${hidden?'Hiện':'Ẩn'} cả nhóm ${name}" title="${hidden?'Hiện':'Ẩn'} cả nhóm" aria-pressed="${!hidden}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8s2.5-4 6.5-4 6.5 4 6.5 4-2.5 4-6.5 4-6.5-4-6.5-4Z"/><circle cx="8" cy="8" r="1.5"/>${hidden?'<path d="m2 2 12 12"/>':''}</svg></button>`
+        +`<button type="button" data-folder-toggle="${id}" aria-expanded="${!group.collapsed}" aria-label="${group.collapsed?'Mở':'Thu gọn'} folder">${group.collapsed?'▸':'▾'}</button>`
+        +`<button type="button" class="layer-folder-select" data-folder-select="${id}" title="Chọn nhóm · Nhấp đúp hoặc F2 để đổi tên"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 5h6l2 2h8v10H2Z"/></svg><span>${name} (${keys.length})</span></button>`
+        +`<button type="button" data-folder-duplicate="${id}" title="Duplicate nhóm (Ctrl+D)" aria-label="Duplicate nhóm">⧉</button>`
+        +`<button type="button" data-folder-ungroup="${id}" title="Tách nhóm — giữ nguyên các layer">Ungroup</button></div>`
+        +`<div class="layer-folder-children"${group.collapsed?' hidden':''}>`;
+      for(const key of keys) {
+        grouped.add(key);
+        if(rowHtml.has(key)) html+=rowHtml.get(key);
+        else {
+          const item=Core.getOverlayById(scene,Number(key.split(':')[1]));
+          html+=`<button type="button" class="artwork-list-item${multiSelectKeys.has(key)?' active':''}" data-folder-artwork="${item.id}"><span class="artwork-item-name">Artwork · ${escapeHtml(item.artwork?.name || 'Hình in / thêu')}</span></button>`;
+        }
+      }
+      html+='</div></section>';
+    }
+    for(const [key,row] of rowHtml) if(!grouped.has(key)) html+=row;
     element.decorList.innerHTML = html;
 
-    element.decorList.querySelectorAll('.artwork-list-item').forEach((row) => {
+    element.decorList.querySelectorAll('[data-folder-duplicate]').forEach(button=>button.addEventListener('click',()=>duplicateWorkspaceLayers([],button.dataset.folderDuplicate)));
+    element.decorList.querySelectorAll('[data-decor-duplicate]').forEach(button=>button.addEventListener('click',event=>{
+      event.stopPropagation();duplicateWorkspaceLayers([button.dataset.decorDuplicate]);
+    }));
+    element.decorList.querySelectorAll('[data-folder-eye]').forEach(button=>button.addEventListener('click',event=>{
+      event.stopPropagation();
+      const id=button.dataset.folderEye;
+      scene=Core.toggleLayerGroupHidden(scene,id);
+      if(Core.isLayerGroupHidden(scene,id)) {
+        const group=scene.layerGroups.find(group=>group.id===id);
+        group?.keys.forEach(key=>multiSelectKeys.delete(key));
+        if(group?.keys.includes(decorKeyOf(scene.activeDecor))) scene=Core.selectDecor(scene,null);
+        if(group?.keys.includes(`artwork:${scene.activeOverlayId}`)) artworkSelected=false;
+      }
+      markDirty();render();
+    }));
+    element.decorList.querySelectorAll('[data-folder-select]').forEach(button=>button.addEventListener('click',event=>{
+      const group=scene.layerGroups.find(g=>g.id===button.dataset.folderSelect);
+      if(group) {
+        // Keep the clicked title in the DOM so the second click produces dblclick.
+        selectListLayers(group.keys,event,true);
+      }
+    }));
+    element.decorList.querySelectorAll('[data-folder-toggle]').forEach(button=>button.addEventListener('click',()=>{
+      const group=scene.layerGroups.find(g=>g.id===button.dataset.folderToggle);
+      if(group) {scene=Core.updateLayerGroup(scene,group.id,{collapsed:!group.collapsed});markDirty();render();}
+    }));
+    element.decorList.querySelectorAll('[data-folder-ungroup]').forEach(button=>button.addEventListener('click',()=>{
+      scene=Core.removeLayerGroup(scene,button.dataset.folderUngroup);
+      setLayerSelection([]);markDirty();render();showToast('Đã tách nhóm — giữ nguyên các layer.');
+    }));
+    element.decorList.querySelectorAll('[data-folder-select]').forEach(button=>{
+      const beginRename=()=>{
+      const group=scene.layerGroups.find(g=>g.id===button.dataset.folderSelect);
+      if(!group) return;
+      const label=button.parentElement.querySelector('[data-folder-select]');
+      const input=document.createElement('input');input.className='layer-folder-name';input.value=group.name || 'Nhóm';input.maxLength=80;input.setAttribute('aria-label','Tên folder');
+      label.replaceWith(input);let cancelled=false;
+      input.addEventListener('keydown',event=>{
+        event.stopPropagation();
+        if(event.key==='Enter'){event.preventDefault();input.blur();}
+        if(event.key==='Escape'){cancelled=true;input.blur();}
+      });
+      input.addEventListener('blur',()=>{if(!cancelled){scene=Core.updateLayerGroup(scene,group.id,{name:input.value});markDirty();}render();},{once:true});
+      input.focus();input.select();
+      };
+      button.addEventListener('dblclick',beginRename);
+      button.addEventListener('keydown',event=>{if(event.key==='F2'){event.preventDefault();beginRename();}});
+    });
+    element.decorList.querySelectorAll('[data-folder-artwork]').forEach(button=>button.addEventListener('click',event=>{
+      selectListLayers([`artwork:${button.dataset.folderArtwork}`],event);
+    }));
+
+    element.decorList.querySelectorAll('[data-decor-row]').forEach((row) => {
       row.addEventListener('click', (event) => {
-        if (event.target.closest('[data-decor-lock], [data-decor-remove], [data-decor-eye]')) return;
-        const [type, id] = row.dataset.decorRow.split(':');
-        multiSelectKeys.clear();
-        scene = Core.selectDecor(scene, { type, id: Number(id) });
-        markDirty();
-        render();
+        if (event.target.closest('[data-decor-lock], [data-decor-remove], [data-decor-eye], [data-decor-duplicate]')) return;
+        selectListLayers([row.dataset.decorRow],event);
       });
     });
     element.decorList.querySelectorAll('[data-decor-eye]').forEach((button) => {
@@ -3948,6 +4617,12 @@
     const selection = scene.activeDecor;
     const item = selection ? Core.findDecorItem(scene, selection.type, selection.id) : null;
     const multiCount = multiSelectKeys.size;
+    const editableCount = getSelectedDecorItems().filter(item => !item.locked && !item.hidden).length;
+    $('#decorAlignLabel').textContent = editableCount > 1 ? `Căn chỉnh ${editableCount} lớp với nhau` : 'Căn chỉnh theo khung';
+    $$('#decorAlignGroup .decor-align-btn').forEach(button => {
+      button.disabled = editableCount < (button.dataset.decorAlign.startsWith('distribute') ? 3 : 1);
+    });
+    $('#decorSpaceX').disabled = $('#decorSpaceY').disabled = editableCount < 2;
     const isSingle = Boolean(item) && multiCount <= 1;
     element.decorEditor.classList.toggle('hidden', !item && multiCount === 0);
     element.decorTextControls.style.display = isSingle && item.type === 'text' ? '' : 'none';
@@ -3958,7 +4633,7 @@
     if (element.decorMultiHint) {
       element.decorMultiHint.style.display = multiCount > 1 ? '' : 'none';
       if (multiCount > 1) {
-        element.decorMultiHint.textContent = `Đã chọn ${multiCount} lớp — nút căn chỉnh xếp mép/tâm nhóm, 2 nút cuối phân bố đều (≥3 lớp). Ctrl+G để nhóm, Ctrl+Shift+G để tách.`;
+        element.decorMultiHint.textContent = `Đã chọn ${multiCount} lớp. Chia đều ngang/dọc giữ hai lớp ngoài cùng; xếp hàng/cột dùng khoảng hở nhập bên dưới. Ctrl+G để nhóm.`;
       }
     }
     element.decorSizeLabel.textContent = item?.type === 'text' ? 'Cỡ chữ' : 'Cỡ icon';
@@ -4039,7 +4714,56 @@
   });
 
   // ── Nhóm / tách nhóm (Ctrl+G / Ctrl+Shift+G) ──────────────────────────────
+  async function duplicateWorkspaceLayers(keys, groupId) {
+    const side=scene.view;
+    try {
+      if(pendingMaskRestore) await pendingMaskRestore;
+      if(pendingMaskAssets) await restorePendingMasks(element.artboard.clientWidth,element.artboard.clientHeight);
+      if(scene.view!==side) return;
+      const result=Core.duplicateLayers(scene,keys,groupId);
+      if(!result.copies.length) return;
+      for(const copy of result.copies.filter(c=>c.type==='artwork')) {
+        const asset=artworkBlobs[copy.sourceId];
+        if(asset) {
+          artworkBlobs[copy.id]={...asset};
+          const url=URL.createObjectURL(asset.blob);artworkUrls[copy.id]=url;
+          const overlay=Core.getOverlayById(result.scene,copy.id);overlay.artwork={...overlay.artwork,src:url};
+        }
+        if(overlayLibraryIds[copy.sourceId]) overlayLibraryIds[copy.id]=overlayLibraryIds[copy.sourceId];
+        const mask=overlayMasks.get(copy.sourceId);
+        if(mask) {
+          const {width,height}=mask.canvas;
+          const cloned=ensureOverlayMask(copy.id,width,height);
+          const x=copy.dx*width/100,y=copy.dy*height/100;
+          cloned.ctx.save();cloned.ctx.beginPath();cloned.ctx.rect(x,y,width,height);cloned.ctx.clip();
+          cloned.ctx.globalCompositeOperation='copy';cloned.ctx.drawImage(mask.canvas,x,y);cloned.ctx.restore();
+        }
+      }
+      scene=result.scene;
+      if(result.copies.some(c=>c.type==='artwork')) scene=Core.selectOverlayById(scene,scene.activeOverlayId);
+      setLayerSelection(result.copies.map(c=>`${c.type}:${c.id}`));
+      if(result.copies.length===1 && result.copies[0].type==='artwork') artworkSelected=true;
+      markDirty();render();showToast(result.groupId?'Đã duplicate cả nhóm.':'Đã duplicate layer.');
+    } catch(error) {showToast('Không thể duplicate: '+error.message,'error');}
+  }
+
+  window.addEventListener('keydown',event=>{
+    if(!(event.ctrlKey||event.metaKey)||event.key.toLowerCase()!=='d'||brushState.active||inlineTextEdit||event.target.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+    event.preventDefault();
+    const keys=multiSelectKeys.size?[...multiSelectKeys]:scene.activeDecor?[decorKeyOf(scene.activeDecor)]:artworkSelected?[`artwork:${scene.activeOverlayId}`]:[];
+    const group=(scene.layerGroups||[]).find(g=>g.side===scene.view && g.keys.length===keys.length && g.keys.every(key=>keys.includes(key)));
+    duplicateWorkspaceLayers(keys,group?.id);
+  });
+
   function groupSelected() {
+    const layers=selectedLayers();
+    if(layers.length>1) {
+      const keys=layers.map(item=>`${item.type}:${item.id}`);
+      scene=Core.ungroupDecorItems(scene,layers.filter(item=>item.type!=='artwork'));
+      scene={...scene,layerGroups:[...(scene.layerGroups||[]).map(g=>g.side===scene.view?{...g,keys:g.keys.filter(key=>!keys.includes(key))}:g).filter(g=>g.keys.length>1),
+        {id:`group-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,name:`Nhóm ${(scene.layerGroups||[]).length+1}`,collapsed:false,side:scene.view,keys}]};
+      markDirty();render();showToast(`Đã nhóm ${layers.length} lớp. Kéo góc khung để đổi kích thước.`);return;
+    }
     const selection = getSelectedDecorItems();
     if (selection.length < 2) {
       showToast('Chọn từ 2 lớp (Ctrl/Cmd + click) rồi bấm Ctrl+G để nhóm.', 'error');
@@ -4052,9 +4776,11 @@
   }
 
   function ungroupSelected() {
+    if(multiSelectKeys.size) scene={...scene,layerGroups:(scene.layerGroups||[]).filter(g=>g.side!==scene.view || !g.keys.some(key=>multiSelectKeys.has(key)))};
     const selection = getSelectedDecorItems();
-    if (!selection.length) return;
+    if (!selection.length) {setLayerSelection([]);markDirty();render();return;}
     scene = Core.ungroupDecorItems(scene, selection.map((item) => ({ type: item.type, id: item.id })));
+    setLayerSelection([]);
     markDirty();
     render();
     showToast('Đã tách nhóm.');
@@ -4062,6 +4788,7 @@
 
   window.addEventListener('keydown', (event) => {
     if (brushState.active || inlineTextEdit) return;
+    if(event.target.closest?.('input,textarea,select,[contenteditable="true"]')) return;
     if (!(event.ctrlKey || event.metaKey)) return;
     if (event.key.toLowerCase() !== 'g') return;
     event.preventDefault();
@@ -4165,8 +4892,33 @@
     setStatus(`Đã căn ${boxes.length} lớp theo nhóm`);
   }
   $$('#decorAlignGroup .decor-align-btn').forEach((button) => {
+    const labels = {left:'Trái',centerX:'Giữa ngang',right:'Phải',top:'Trên',centerY:'Giữa dọc',bottom:'Dưới',distributeX:'Đều ngang',distributeY:'Đều dọc'};
+    const label = document.createElement('span');
+    label.textContent = labels[button.dataset.decorAlign];
+    button.appendChild(label);
+    button.setAttribute('aria-label', button.title);
     button.addEventListener('click', () => alignActiveDecor(button.dataset.decorAlign));
   });
+
+  function spaceSelectedDecor(axis) {
+    const gap = Number($('#decorGap').value);
+    if (!Number.isFinite(gap) || gap < 0 || gap > 400) { showToast('Nhập khoảng hở từ 0 đến 400.', 'error'); return; }
+    const boxes = getSelectedDecorItems().filter(item => !item.locked && !item.hidden)
+      .map(item => ({ ...decorBounds(item), item }))
+      .sort((a,b) => axis === 'x' ? a.left-b.left : a.top-b.top);
+    if (boxes.length < 2) return;
+    const centers = FormDecorLayout.space(boxes, axis, gap / DECOR_REFERENCE_WIDTH * 100 * (axis === 'y' ? artboardAspectRatio() : 1));
+    const last = boxes.length - 1;
+    const extent = centers[last] + (axis === 'x' ? boxes[last].right-boxes[last].left : boxes[last].bottom-boxes[last].top)/2;
+    if (extent > 100) { showToast('Khoảng hở quá lớn so với khung. Giảm khoảng hở hoặc di chuyển nhóm.', 'error'); return; }
+    boxes.forEach((box, index) => {
+      const patch = axis === 'x' ? {x:centers[index],y:boxes[0].item.y} : {y:centers[index],x:boxes[0].left+(box.right-box.left)/2};
+      scene = box.item.type === 'text' ? Core.updateTextItem(scene,patch,box.item.id) : Core.updateIconItem(scene,patch,box.item.id);
+    });
+    markDirty(); render(); setStatus(`Đã xếp ${boxes.length} lớp, khoảng hở ${gap} đơn vị`);
+  }
+  $('#decorSpaceX').addEventListener('click', () => spaceSelectedDecor('x'));
+  $('#decorSpaceY').addEventListener('click', () => spaceSelectedDecor('y'));
 
   element.baseLockToggle.addEventListener('click', () => {
     baseLocked = !baseLocked;
@@ -4202,10 +4954,12 @@
   element.sizeRange.addEventListener('input', () => resizeArtwork(element.sizeRange.value));
   element.rotationRange.addEventListener('input', () => rotateArtwork(element.rotationRange.value));
   element.opacityRange.addEventListener('input', () => updateArtwork({ opacity: element.opacityRange.value }));
+  element.brightnessRange?.addEventListener('input', () => updateArtwork({ brightness: Number(element.brightnessRange.value) }));
+  element.artworkContrastRange?.addEventListener('input', () => updateArtwork({ contrast: Number(element.artworkContrastRange.value) }));
   element.artworkX.addEventListener('change', () => updatePercentField(element.artworkX, (x) => moveArtwork({ x })));
   element.artworkY.addEventListener('change', () => updatePercentField(element.artworkY, (y) => moveArtwork({ y })));
 
-  $$('.swatch').forEach((swatch) => swatch.addEventListener('click', () => {
+  function selectPresetBackground(swatch) {
     const value = swatch.dataset.background;
     invalidatePending('background');
     revokeLater(fileUrls.background);
@@ -4216,6 +4970,38 @@
     setMessage(element.backgroundMessage, `${presetNames[value]} đang được dùng.`, 'success');
     setStatus('Đã đổi phông nền');
     render();
+  }
+
+  const swatchGroup = document.querySelector('.swatches');
+  let gradientHeadingAdded = false;
+  expandedPresetBackgrounds.forEach(([value, label]) => {
+    const isGradient = gradientPresetIds.has(value);
+    if (isGradient && !gradientHeadingAdded) {
+      const heading = document.createElement('div');
+      heading.className = 'background-library-heading';
+      heading.textContent = `GRADIENT THỜI TRANG · ${gradientPresetIds.size}`;
+      swatchGroup?.append(heading);
+      gradientHeadingAdded = true;
+    }
+    const swatch = document.createElement('button');
+    swatch.className = `swatch${isGradient ? ' gradient-swatch' : ''}`;
+    swatch.type = 'button';
+    swatch.dataset.background = value;
+    swatch.setAttribute('aria-label', label);
+    swatch.title = presetNames[value];
+    if (isGradient) {
+      swatch.style.backgroundImage = `url("${getBackgroundGradientPreview(value, 'square')}")`;
+      const caption = document.createElement('span');
+      caption.textContent = (BackgroundGradients.list().find((entry) => entry.id === value)?.label) || presetNames[value];
+      swatch.appendChild(caption);
+    }
+    swatch.addEventListener('click', () => selectPresetBackground(swatch));
+    swatchGroup?.append(swatch);
+  });
+
+  $$('.swatch').forEach((swatch) => swatch.addEventListener('click', () => {
+    if (expandedPresetBackgrounds.some(([value]) => value === swatch.dataset.background)) return;
+    selectPresetBackground(swatch);
   }));
 
   [element.ratioSquare, element.ratioPortrait].forEach((button) => button.addEventListener('click', () => {
@@ -4629,6 +5415,8 @@
   attachBaseResize();
   attachSafeAreaDrag();
   attachWorkspaceNavigation();
+  attachMarqueeSelection();
+  attachWorkspaceTools();
   attachDropZones();
   initAccordions();
   // Escape: bỏ chọn mọi lớp (khi đang sửa chữ, input tự xử lý Escape).
@@ -4657,8 +5445,6 @@
     deferredRevokes.forEach((url) => URL.revokeObjectURL(url));
   });
 
-  render();
-
   // Warm-up font + khôi phục workspace theo đúng thứ tự: lần vẽ canvas đầu tiên
   // (nhất là sau reload) có thể dùng font fallback nếu glyph của font chưa được
   // nạp → chữ watermark bị méo/sai hình. Nạp trước mọi font, restore, rồi vẽ lại.
@@ -4681,23 +5467,28 @@
   }
 
   (async () => {
-    await loadBaseLibrary();
-    await loadArtworkLibrary();
-    await restoreWorkspace();
-    renderBaseLibrary();
-    renderArtworkLibrary();
-    await preloadWatermarkFonts();
-    // Vẽ lại watermark bằng scene đã khôi phục + font đã sẵn sàng.
-    // Font local trong Chromium đôi khi chỉ rasterize đúng ở lần vẽ canvas
-    // kế tiếp (glyph nạp bất đồng bộ), nên frame đầu sau reload có thể vẫn
-    // dùng fallback → chữ méo. Vẽ lại nhiều lần theo mốc thời gian trễ dần
-    // để chắc chắn bắt được khi glyph đã sẵn sàng.
-    [0, 50, 150, 300, 600, 1000].forEach((ms) => {
-      setTimeout(() => renderWatermarkPreview(), ms);
-    });
-    // Và vẽ lại mỗi khi trình duyệt báo có font vừa nạp xong.
+    try {
+      element.stageWell.setAttribute('aria-busy','true');
+      await restoreWorkspace();
+      await preloadWatermarkFonts();
+      render();
+      await Promise.all([...element.artboard.querySelectorAll('img')]
+        .filter(img=>img.getAttribute('src')).map(img=>img.decode().catch(()=>{})));
+      await new Promise(resolve=>requestAnimationFrame(resolve));
+      await Promise.all([runDecorPreview(),renderWatermarkPreview(),runFabricPreview()]);
+    } catch(error) {
+      showToast('Không thể hoàn tất preview: '+error.message,'error');
+    } finally {
+      workspaceBooting=false;
+      document.documentElement.classList.remove('workspace-loading');
+      element.stageWell.setAttribute('aria-busy','false');
+    }
+    void loadBaseLibrary();
+    void loadArtworkLibrary();
     if (document.fonts?.addEventListener) {
-      document.fonts.addEventListener('loadingdone', () => renderWatermarkPreview());
+      document.fonts.addEventListener('loadingdone', () => {
+        scheduleDecorPreview();renderWatermarkPreview();syncDecorHitNodes();syncGroupSelection();
+      });
     }
   })();
 
@@ -4706,6 +5497,10 @@
   // stale pixel size and the artwork appears shrunken / skewed until the next
   // user interaction triggers a fresh render.
   new ResizeObserver(() => {
+    if(workspaceBooting) return;
+    scheduleDecorPreview();
+    renderWatermarkPreview();
+    syncDecorHitNodes();syncGroupSelection();
     const hasArtwork = Core.getOverlays(scene).some(o => o.artwork?.src)
       && scene.base.kind !== 'default';
     if (hasArtwork) scheduleFabricPreview();
@@ -4832,10 +5627,15 @@
   // ── Activate / deactivate brush mode
   function setBrushActive(active) {
     brushState.active = active;
+    if(active) workspaceTool='select';
+    syncWorkspaceTools();
     element.brushToggle.classList.toggle('active', active);
     element.brushToggle.querySelector('span').textContent = active ? 'Tắt cọ vẽ' : 'Bật cọ vẽ';
     element.artboard.classList.toggle('brush-active', active);
     if (active) {
+      ensureCursorCanvas();
+      cursorCanvas.width=element.artboard.clientWidth;
+      cursorCanvas.height=element.artboard.clientHeight;
       artworkSelected = false;
       baseSelected = false;
       // Force remove selection class and hide transform handles directly
@@ -4901,7 +5701,7 @@
       brushPainting = false;
       brushTargetOverlayId = null;
       if (element.artboard.hasPointerCapture(event.pointerId)) element.artboard.releasePointerCapture(event.pointerId);
-      markDirty(); // persist mask changes via auto-save
+      persistMaskMutation();
     };
     element.artboard.addEventListener('pointerup', stopBrush);
     element.artboard.addEventListener('pointercancel', stopBrush);
@@ -4932,6 +5732,7 @@
 
   function setBrushMode(mode) {
     brushState.mode = mode;
+    syncWorkspaceTools();
     [element.brushErase, element.brushBlur, element.brushRestore].forEach(btn => btn.classList.remove('active'));
     ({ erase: element.brushErase, blur: element.brushBlur, restore: element.brushRestore })[mode].classList.add('active');
     saveSettings();
@@ -4959,7 +5760,7 @@
     const overlay = Core.getActiveOverlay(scene);
     if (overlay) saveMaskSnapshot(overlay.id);
     resetMask();
-    markDirty(); // persist cleared mask via auto-save
+    persistMaskMutation();
     setStatus('Đã xoá mask của artwork đang chọn');
     showToast('Đã xoá mask — artwork đang chọn hiển thị đầy đủ.');
   });
@@ -4972,4 +5773,223 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undoMask(); }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redoMask(); }
   });
+
+  // ─── LỘ TRÌNH NÂNG CẤP MỚI: Presets, Invert, Recolor, Paste, Batch Export ──
+
+  // 1. Presets vị trí in thời trang chuẩn
+  const PRESET_NAMES = {
+    leftChest: 'Ngực trái chuẩn',
+    rightChest: 'Ngực phải',
+    centerChest: 'Giữa ngực chuẩn',
+    oversize: 'Khổ lớn (A3)',
+    neck: 'Cổ / Gáy áo',
+  };
+  [
+    ['presetLeftChest', 'leftChest'],
+    ['presetRightChest', 'rightChest'],
+    ['presetCenterChest', 'centerChest'],
+    ['presetOversize', 'oversize'],
+    ['presetNeck', 'neck'],
+  ].forEach(([btnId, presetKey]) => {
+    const btn = element[btnId];
+    if (btn) {
+      btn.addEventListener('click', () => {
+        scene = Core.applyPositionPreset(scene, presetKey);
+        markDirty();
+        render();
+        showToast(`Đã chuyển vị trí: ${PRESET_NAMES[presetKey]}`);
+      });
+    }
+  });
+
+  if (element.presetCenterHorizontal) {
+    element.presetCenterHorizontal.addEventListener('click', () => {
+      scene = Core.centerOverlayX(scene);
+      markDirty();
+      render();
+      showToast('Đã căn chính giữa trục ngực (X = 50%)');
+    });
+  }
+
+  // 2. Đảo màu Invert & Khử nền trắng Artwork
+  if (element.artworkInvertBtn) {
+    element.artworkInvertBtn.addEventListener('click', () => {
+      scene = Core.toggleOverlayInvert(scene);
+      markDirty();
+      render();
+      const active = Core.getActiveOverlay(scene);
+      showToast(active?.invert ? 'Đã đảo màu (Trắng)' : 'Đã trở về màu gốc (Đen)');
+    });
+  }
+  if (element.artworkChromaWhite) {
+    element.artworkChromaWhite.addEventListener('click', () => applyChromaKeyToActive('white'));
+  }
+
+  // 3. Dán ảnh trực tiếp từ Clipboard (Ctrl + V)
+  window.addEventListener('paste', async (event) => {
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    const items = event.clipboardData?.items;
+    if (!items || !items.length) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        event.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        const file = new File([blob], `pasted-artwork-${Date.now()}.png`, { type: blob.type || 'image/png' });
+        const active = Core.getActiveOverlay(scene);
+        if (active) {
+          await replaceArtworkImage(file);
+          showToast('Đã dán ảnh từ clipboard vào artwork đang chọn!');
+        } else {
+          await uploadImage(file, 'artwork');
+          showToast('Đã dán ảnh từ clipboard làm artwork mới!');
+        }
+        break;
+      }
+    }
+  });
+
+  // 4. Đổi màu phôi áo (Garment Recolor)
+  async function applyGarmentTint(color) {
+    scene = Core.setGarmentColor(scene, color);
+    const chips = [...document.querySelectorAll('.garment-color-chip')];
+    const activeChip = chips.find(c => (c.dataset.color || null) === (color || null));
+    if (element.garmentColorLabel) {
+      element.garmentColorLabel.textContent = activeChip?.title || (color ? color.toUpperCase() : 'Mặc định');
+    }
+    chips.forEach(c => c.classList.toggle('active', (c.dataset.color || '') === (color || '')));
+    markDirty();
+    render();
+    showToast(color ? `Đã chọn màu áo: ${color}` : 'Đã khôi phục màu áo gốc');
+  }
+
+  document.querySelectorAll('.garment-color-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      applyGarmentTint(chip.dataset.color || null);
+    });
+  });
+  if (element.garmentCustomColor) {
+    element.garmentCustomColor.addEventListener('input', (e) => {
+      applyGarmentTint(e.target.value);
+    });
+  }
+
+  // 5. Xuất hàng loạt Artwork (Batch Export)
+  async function renderSceneToCanvasBlob() {
+    const { width, height } = Core.getExportDimensionsScaled(scene, exportParams.scale);
+    const isJpg = exportParams.format === 'jpg';
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { alpha: false });
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+
+    if (scene.background.kind === 'upload') {
+      drawImageCover(context, await loadImage(scene.background.src), width, height);
+    } else {
+      drawPresetBackground(context, width, height, scene.background.value);
+    }
+
+    // Base image (có tính đến màu áo phôi)
+    const baseImg = await loadImage(getBaseEffectiveSrc(scene));
+    drawImageContain(context, baseImg, width, height, scene.baseTransform);
+
+    // Overlays
+    const currentOverlays = Core.getOverlays(scene).filter(ov => !ov.hidden);
+    for (const ov of currentOverlays) {
+      await drawArtworkWithFabric(context, baseImg, width, height, ov);
+    }
+
+    // Decor
+    await drawDecorations(context, width, height);
+
+    // Logo / Watermark
+    if (scene.logo.enabled) {
+      const wmBuffer = document.createElement('canvas');
+      wmBuffer.width = width;
+      wmBuffer.height = height;
+      const wmCtx = wmBuffer.getContext('2d');
+      await drawWatermark(wmCtx, width, height, scene.logo);
+      context.save();
+      context.globalCompositeOperation = 'source-over';
+      context.globalAlpha = 1;
+      context.drawImage(wmBuffer, 0, 0);
+      context.restore();
+    }
+
+    const mime = isJpg ? 'image/jpeg' : 'image/png';
+    const quality = isJpg ? 0.92 : undefined;
+    return new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+  }
+
+  async function runBatchExport(files) {
+    const active = Core.getActiveOverlay(scene);
+    if (!active) return;
+    if (element.batchExportTrigger) element.batchExportTrigger.disabled = true;
+    element.exportButton.disabled = true;
+    showToast(`Bắt đầu xuất hàng loạt ${files.length} ảnh mockup...`);
+    const originalArtwork = { ...active.artwork };
+    const ext = exportParams.format === 'jpg' ? 'jpg' : 'png';
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setStatus(`Đang xuất [${i + 1}/${files.length}]: ${file.name}…`);
+        const url = URL.createObjectURL(file);
+        try {
+          const dims = await decodeImage(url);
+          const meta = { ...dims, size: file.size, type: file.type };
+          scene = Core.updateOverlay(scene, {
+            artwork: { name: file.name, src: url, metadata: meta, label: file.name.replace(/\.[^/.]+$/, '').slice(0, 18).toUpperCase() }
+          }, active.id);
+
+          const blob = await renderSceneToCanvasBlob();
+          if (blob) {
+            const href = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = href;
+            const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+            link.download = `mockup-${cleanName}.${ext}`;
+            document.body.append(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(href), 1500);
+          }
+          await new Promise(r => setTimeout(r, 400));
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
+      showToast(`Đã xuất thành công toàn bộ ${files.length} ảnh mockup!`);
+      setStatus(`Đã hoàn tất xuất hàng loạt ${files.length} ảnh`);
+    } catch (err) {
+      showToast('Lỗi trong khi xuất hàng loạt: ' + (err.message || err), 'error');
+    } finally {
+      scene = Core.updateOverlay(scene, { artwork: originalArtwork }, active.id);
+      if (element.batchExportTrigger) element.batchExportTrigger.disabled = false;
+      element.exportButton.disabled = false;
+      render();
+    }
+  }
+
+  if (element.batchExportTrigger && element.batchExportFiles) {
+    element.batchExportTrigger.addEventListener('click', () => {
+      const active = Core.getActiveOverlay(scene);
+      if (!active) {
+        showToast('Vui lòng tạo hoặc chọn 1 artwork làm vị trí chuẩn trước khi xuất hàng loạt.', 'error');
+        return;
+      }
+      element.batchExportFiles.click();
+    });
+
+    element.batchExportFiles.addEventListener('change', async () => {
+      const files = [...element.batchExportFiles.files];
+      element.batchExportFiles.value = '';
+      if (!files.length) return;
+      await runBatchExport(files);
+    });
+  }
+
 })();

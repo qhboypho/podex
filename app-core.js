@@ -131,6 +131,14 @@ function constrainOverlayToSafeArea(overlay, safeArea) {
   };
 }
 
+const PRESET_POSITIONS = Object.freeze({
+  leftChest: Object.freeze({ x: 58, y: 36, scale: 0.45, rotation: 0 }),
+  rightChest: Object.freeze({ x: 42, y: 36, scale: 0.45, rotation: 0 }),
+  centerChest: Object.freeze({ x: 50, y: 40, scale: 0.85, rotation: 0 }),
+  oversize: Object.freeze({ x: 50, y: 45, scale: 1.25, rotation: 0 }),
+  neck: Object.freeze({ x: 50, y: 26, scale: 0.35, rotation: 0 }),
+});
+
 let _overlayIdCounter = 0;
 
 const createOverlay = (side) => ({
@@ -144,6 +152,9 @@ const createOverlay = (side) => ({
   opacity: 0.88,
   locked: false,
   hidden: false,
+  invert: false,
+  brightness: 0,
+  contrast: 0,
   artwork: { ...DEFAULT_ARTWORK },
 });
 
@@ -234,6 +245,7 @@ function createScene() {
     base: {
       kind: 'default',
       name: 'Phôi trơn · mẫu mặc định',
+      color: null,
       src: DEFAULT_BASE_SRC,
       locked: true,
       metadata: null,
@@ -490,6 +502,9 @@ function constrainOverlayToCanvas(overlay) {
     x: round(clamp(number(overlay.x, 50), halfWidth, 100 - halfWidth)),
     y: round(clamp(number(overlay.y, 50), halfHeight, 100 - halfHeight)),
     rotation: round(clamp(number(overlay.rotation, 0), -MAX_DIRECT_ARTWORK_ROTATION, MAX_DIRECT_ARTWORK_ROTATION)),
+    invert: Boolean(overlay.invert),
+    brightness: round(clamp(number(overlay.brightness, 0), -100, 100)),
+    contrast: round(clamp(number(overlay.contrast, 0), -100, 100)),
   };
 }
 
@@ -517,6 +532,38 @@ function moveOverlay(scene, position, targetId) {
   }, targetId);
 }
 
+
+function applyPositionPreset(scene, presetKey, targetId) {
+  const preset = PRESET_POSITIONS[presetKey];
+  if (!preset) return scene;
+  return updateDirectOverlay(scene, {
+    x: preset.x,
+    y: preset.y,
+    scale: preset.scale,
+    rotation: preset.rotation,
+  }, targetId);
+}
+
+function centerOverlayX(scene, targetId) {
+  return updateDirectOverlay(scene, { x: 50 }, targetId);
+}
+
+function toggleOverlayInvert(scene, targetId) {
+  const active = targetId != null ? getOverlayById(scene, targetId) : getActiveOverlay(scene);
+  if (!active) return scene;
+  return updateDirectOverlay(scene, { invert: !active.invert }, targetId);
+}
+
+function setGarmentColor(scene, color) {
+  return {
+    ...scene,
+    base: {
+      ...scene.base,
+      color: typeof color === 'string' && color ? color : null,
+    },
+  };
+}
+
 function rotateOverlay(scene, rotation, targetId) {
   return updateDirectOverlay(scene, { rotation }, targetId);
 }
@@ -532,6 +579,9 @@ function plainOverlay(overlay) {
     opacity: overlay.opacity,
     locked: overlay.locked || false,
     hidden: overlay.hidden || false,
+    invert: Boolean(overlay.invert),
+    brightness: overlay.brightness,
+    contrast: overlay.contrast,
     artwork: overlay.artwork ? { name: overlay.artwork.name, label: overlay.artwork.label } : undefined,
   };
 }
@@ -554,6 +604,85 @@ function plainDecorItem(item) {
   };
 }
 
+function normalizeLayerGroups(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups.filter(g => g && Array.isArray(g.keys)).map(g => ({
+    id: String(g.id || ''), side: g.side === 'back' ? 'back' : 'front',
+    ...(g.name != null ? {name: String(g.name).trim().slice(0,80) || 'Nhóm'} : {}),
+    ...(g.collapsed != null ? {collapsed: Boolean(g.collapsed)} : {}),
+    keys: [...new Set(g.keys.filter(key => typeof key === 'string' && /^(text|icon|artwork):\d+$/.test(key)))],
+  })).filter(g => g.id && g.keys.length > 1);
+}
+
+function updateLayerGroup(scene, id, patch) {
+  return {...scene, layerGroups: normalizeLayerGroups((scene.layerGroups || []).map(g => g.id === id
+    ? {...g, ...(patch.name !== undefined ? {name:patch.name} : {}), ...(patch.collapsed !== undefined ? {collapsed:patch.collapsed} : {})} : g))};
+}
+
+function removeLayerGroup(scene, id) {
+  return {...scene, layerGroups:(scene.layerGroups || []).filter(g => g.id !== id)};
+}
+
+function duplicateLayers(scene, keys, groupId) {
+  const group=(scene.layerGroups || []).find(g=>g.id===groupId && g.side===scene.view);
+  const lists=scene.view==='back'?{text:'backTextItems',icon:'backIconItems',artwork:'backOverlays'}:{text:'textItems',icon:'iconItems',artwork:'overlays'};
+  const sources=[...new Set(group?group.keys:(keys || []))].flatMap(key=>{
+    const [type,id]=key.split(':');const listKey=lists[type];
+    const item=(scene[listKey] || []).find(item=>item.id===Number(id));
+    return item?[{type,item,listKey}]:[];
+  });
+  if(!sources.length) return {scene,copies:[],groupId:null};
+  const dx=Math.max(0,Math.min(3,...sources.map(({item})=>97-item.x)));
+  const dy=Math.max(0,Math.min(3,...sources.map(({item})=>97-item.y)));
+  let next={...scene};const copies=[];
+  for(const {type,item,listKey} of sources) {
+    const id=type==='artwork'?++_overlayIdCounter:++_decorIdCounter;
+    const clone={...item,id,x:item.x+dx,y:item.y+dy,groupId:null};
+    if(type==='artwork') clone.artwork={...item.artwork};
+    next[listKey]=[...next[listKey],clone];
+    copies.push({type,sourceId:item.id,id,dx,dy});
+  }
+  let newGroupId=null;
+  if(group && copies.length>1) {
+    newGroupId=`group-copy-${++_decorGroupIdCounter}-${Date.now()}`;
+    next.layerGroups=[...(scene.layerGroups||[]),{...group,id:newGroupId,name:`${(group.name || 'Nhóm').slice(0,70)} — bản sao`,keys:copies.map(c=>`${c.type}:${c.id}`)}];
+  }
+  const decor=copies.find(c=>c.type!=='artwork'),art=copies.find(c=>c.type==='artwork');
+  next.activeDecor=decor?{type:decor.type,id:decor.id}:null;
+  if(art) next.activeOverlayId=art.id;
+  return {scene:withLegacy(next),copies,groupId:newGroupId};
+}
+
+function layerGroupMembers(scene, id) {
+  const group=(scene.layerGroups || []).find(g=>g.id===id);
+  if(!group) return [];
+  const lists=group.side==='back'
+    ? {text:'backTextItems',icon:'backIconItems',artwork:'backOverlays'}
+    : {text:'textItems',icon:'iconItems',artwork:'overlays'};
+  return group.keys.flatMap(key=>{
+    const [type,itemId]=key.split(':');
+    const listKey=lists[type], item=(scene[listKey] || []).find(item=>item.id===Number(itemId));
+    return item ? [{listKey,item}] : [];
+  });
+}
+
+function isLayerGroupHidden(scene, id) {
+  const members=layerGroupMembers(scene,id);
+  return members.length>0 && members.every(({item})=>item.hidden);
+}
+
+function toggleLayerGroupHidden(scene, id) {
+  const members=layerGroupMembers(scene,id);
+  if(!members.length) return scene;
+  const hidden=!members.every(({item})=>item.hidden);
+  const next={...scene};
+  for(const listKey of new Set(members.map(member=>member.listKey))) {
+    const ids=new Set(members.filter(member=>member.listKey===listKey).map(({item})=>item.id));
+    next[listKey]=scene[listKey].map(item=>ids.has(item.id)?{...item,hidden}:item);
+  }
+  return withLegacy(next);
+}
+
 function serializeDraft(scene) {
   return {
     version: 3,
@@ -564,10 +693,12 @@ function serializeDraft(scene) {
       x: clamp(number(scene.baseTransform?.x, 50), 0, 100),
       y: clamp(number(scene.baseTransform?.y, 50), 0, 100),
     },
+    garmentColor: scene.base?.color || null,
     safeArea: { ...normalizeSafeArea(scene.safeArea) },
     background: {
       kind: scene.background.kind,
       value: scene.background.kind === 'preset' ? scene.background.value : 'linen',
+      name: scene.background.kind === 'preset' ? String(scene.background.name || '').slice(0, 100) : 'Linen daylight',
     },
     logo: {
       enabled: scene.logo.enabled,
@@ -606,6 +737,7 @@ function serializeDraft(scene) {
     iconItems: (scene.iconItems || []).map(plainDecorItem),
     backIconItems: (scene.backIconItems || []).map(plainDecorItem),
     activeDecor: scene.activeDecor || null,
+    layerGroups: normalizeLayerGroups(scene.layerGroups),
     // Legacy fields for backward compat reads
     overlay: plainOverlay(scene.overlays[0] || createOverlay('front')),
     backOverlay: plainOverlay(scene.backOverlays[0] || createOverlay('back')),
@@ -643,20 +775,30 @@ function applyDraft(scene, draft) {
   const safeArea = normalizeSafeArea(draft.safeArea, scene.safeArea);
   let next = {
     ...scene,
+    layerGroups: normalizeLayerGroups(draft.layerGroups),
     view: draft.view === 'back' ? 'back' : 'front',
     canvasRatio: normalizeCanvasRatio(draft.canvasRatio),
     background: draft.background?.kind === 'upload' && scene.background.kind === 'upload'
       ? scene.background
       : {
         kind: 'preset',
-        value: ['linen', 'coast', 'studio', 'snow', 'pearl', 'blush', 'sage', 'slate'].includes(draft.background?.value) ? draft.background.value : 'linen',
-        name: scene.background.name,
+        value: [
+          'linen', 'coast', 'studio', 'snow', 'pearl', 'blush', 'sage', 'slate',
+          'sand', 'lavender', 'sunset', 'midnight', 'noir', 'concrete', 'gallery', 'cobalt',
+          'champagne-glow', 'rose-gold', 'sage-mist', 'ocean-silk', 'lilac-dream',
+          'peach-fizz', 'blue-hour', 'mocha-studio', 'silver-fog', 'mint-coral',
+          'berry-noir', 'aurora-pastel',
+        ].includes(draft.background?.value) ? draft.background.value : 'linen',
+        name: typeof draft.background?.name === 'string' && draft.background.name.trim()
+          ? draft.background.name.trim().slice(0, 100)
+          : String(draft.background?.value || 'linen'),
         src: null,
       },
     safeArea,
   };
   next = setLogo(next, draft.logo || {});
   next = setBaseTransform(next, draft.baseTransform, { moveAttached: false });
+  if ('garmentColor' in draft) next = setGarmentColor(next, draft.garmentColor);
 
   if (draft.version >= 2 && Array.isArray(draft.overlays)) {
     // v2: restore arrays of overlays
@@ -750,6 +892,25 @@ function addOverlay(scene) {
   const newOverlay = createOverlay(side);
   const newList = [...scene[listKey], newOverlay];
   return withLegacy({ ...scene, [listKey]: newList, activeOverlayId: newOverlay.id });
+}
+
+function removeUnusedArtworkPlaceholders(scene) {
+  const next={...scene};
+  for(const listKey of ['overlays','backOverlays']) {
+    const list=scene[listKey];
+    if(list.some(o=>o.artwork?.src)) {
+      next[listKey]=list.filter(o=>o.artwork?.src || o.artwork?.name!==DEFAULT_ARTWORK.name);
+    }
+  }
+  const current=next.view==='back'?next.backOverlays:next.overlays;
+  if(!current.some(o=>o.id===next.activeOverlayId)) next.activeOverlayId=current.at(-1)?.id ?? null;
+  return withLegacy(next);
+}
+
+function insertArtwork(scene, artwork, patch={}) {
+  if(!artwork?.src) return scene;
+  const next=addOverlay(scene);
+  return removeUnusedArtworkPlaceholders(updateDirectOverlay(next,{...patch,artwork}));
 }
 
 function removeOverlay(scene, overlayId) {
@@ -1002,7 +1163,14 @@ function duplicateDecorItem(scene, type, itemId) {
 }
 
 globalThis.FormCore = {
+  PRESET_POSITIONS,
+  applyPositionPreset,
+  centerOverlayX,
+  toggleOverlayInvert,
+  setGarmentColor,
   addOverlay,
+  insertArtwork,
+  removeUnusedArtworkPlaceholders,
   addIconItem,
   addTextItem,
   applyDraft,
@@ -1044,6 +1212,7 @@ globalThis.FormCore = {
   selectOverlayById,
   serializeDraft,
   duplicateDecorItem,
+  duplicateLayers,
   toggleOverlayHidden,
   toggleDecorLock,
   toggleDecorHidden,
@@ -1058,6 +1227,11 @@ globalThis.FormCore = {
   setCanvasRatio,
   setLogo,
   updateOverlay,
+  updateDirectOverlay,
+  updateLayerGroup,
+  removeLayerGroup,
+  isLayerGroupHidden,
+  toggleLayerGroupHidden,
   updateTextItem,
   updateIconItem,
   validateImageFile,

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="vi">
+<html lang="vi" class="workspace-loading">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,6 +7,11 @@
   <title>FORM / Fashion compositor</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2317211e'/%3E%3Cpath d='M8 8h16v4H12v4h10v4H12v4H8z' fill='%23c54a2e'/%3E%3C/svg%3E" />
   <style>
+    .workspace-loading .stage-well{visibility:hidden}
+    .workspace-loading .workspace-tools{visibility:hidden}
+    .workspace-loading .artboard{transition:none!important}
+    .workspace-loading .app{pointer-events:none}
+    .workspace-loading .stage::after{content:'Đang khôi phục workspace…';position:absolute;inset:53px 0 0;display:grid;place-items:center;color:var(--muted);font:12px var(--sans);z-index:35}
     :root{--ink:#17211e;--ink-soft:#3d4943;--muted:#75807a;--line:#d7ded8;--paper:#fafbf9;--mist:#f1f4f1;--accent:#c54a2e;--accent-soft:#fff4f0;--green:#426a5a;--green-soft:#eef5ef;--danger:#ae3c29;--shadow:0 18px 42px -26px rgba(21,36,28,.38);--mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;--sans:Manrope,"Segoe UI",Arial,sans-serif;--surface:#ffffff;--surface-raised:#fbfdfb;--surface-sunken:#f6f8f5;--surface-active:#e1e8e1;--on-ink:#ffffff;--ink-hover:#2b3731;--line-hover:#7f9b8c;--accent-strong:#bb432c;--stage-bg:#e9eeea;--text-subtle:#5b6660;--green-border:#9db1a3;--warn-soft:#fdf8ee;--warn-border:#d0c4a8;--warn-text:#9a8550;--danger-border:#e7b1a6;--danger-soft:#f5e0dc}
     [data-theme="dark"]{--ink:#e8ebe8;--ink-soft:#b9c1bb;--muted:#8b958e;--line:rgba(255,255,255,.10);--line-hover:#64756a;--paper:#191c1a;--mist:#20241f;--accent:#e0684a;--accent-strong:#f07a5c;--accent-soft:rgba(224,104,74,.15);--green:#7db89d;--green-soft:rgba(125,184,157,.13);--green-border:#4a5f53;--danger:#e0604c;--danger-border:#6b3a32;--danger-soft:rgba(224,96,76,.14);--warn-soft:rgba(217,164,74,.13);--warn-border:#6b5a35;--warn-text:#d9b96e;--surface:#242926;--surface-raised:#2a302c;--surface-sunken:#141715;--surface-active:#343b36;--on-ink:#191c1a;--ink-hover:#3d453f;--stage-bg:#151816;--text-subtle:#a5afa8;--shadow:0 18px 42px -26px rgba(0,0,0,.7);color-scheme:dark}
     [data-theme="dark"] .topbar{background:rgba(25,28,26,.92);border-color:rgba(255,255,255,.08)}
@@ -50,6 +55,52 @@
     .decor-guide-v{top:0;bottom:0;width:0;border-left:1px dashed var(--accent)}
     .decor-guide-h{left:0;right:0;height:0;border-top:1px dashed var(--accent)}
     .decor-guide.visible{display:block}
+    .stage-well{position:relative;cursor:crosshair}
+    .workspace-tools{position:absolute;z-index:30;top:65px;left:10px;display:flex;flex-direction:column;gap:4px;padding:5px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:var(--shadow)}
+    .workspace-tools button{width:36px;height:36px;display:grid;place-items:center;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--ink);cursor:pointer;padding:7px}
+    .workspace-tools button:hover{background:var(--surface-active)}
+    .workspace-tools button.active{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+    .workspace-tools button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .workspace-tools svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+    .stage-well[data-tool="select"]{cursor:default}
+    .stage-well[data-tool="marquee"]{cursor:crosshair}
+    .stage-well[data-tool="hand"],.stage-well[data-tool="hand"] *{cursor:grab!important}
+    .stage-well.panning,.stage-well.panning *{cursor:grabbing!important}
+    .workspace-marquee{position:absolute;display:none;z-index:25;border:1px solid #58b9f1;background:rgba(63,156,220,.15);pointer-events:none}
+    .workspace-group{position:absolute;border:1px solid #58b9f1;z-index:12;pointer-events:none;box-sizing:border-box}
+    .workspace-group.hidden{display:none}
+    .has-group-selection .decor-hit.selected{border-color:transparent;background:transparent;box-shadow:none}
+    .layer-folder{border:1px solid var(--line);border-radius:6px;margin:6px 0;background:var(--surface)}
+    .layer-folder.is-selected{border-color:var(--accent)}
+    .layer-folder-header{display:flex;align-items:center;gap:4px;padding:5px}
+    .layer-folder-header button{min-height:28px;border:0;background:transparent;color:var(--ink);cursor:pointer;border-radius:4px;padding:3px 5px;font-size:10px}
+    .layer-folder-header button:hover{background:var(--surface-active)}
+    .folder-eye{flex:none;width:26px;display:grid;place-items:center}
+    .folder-eye svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round}
+    .folder-eye.is-hidden{color:var(--muted)}
+    .layer-folder-select{display:flex;align-items:center;gap:5px;min-width:0;flex:1;text-align:left}
+    .layer-folder-select svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5}
+    .layer-folder-select span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .layer-folder-children{margin:0 6px 6px 17px;padding-left:6px;border-left:1px solid var(--line)}
+    .layer-folder-children[hidden]{display:none}
+    .layer-folder-name{width:100%;min-width:0;flex:1;background:var(--surface);color:var(--ink);border:1px solid var(--accent);border-radius:3px;padding:5px;font-size:11px}
+    .workspace-group-handle{position:absolute;width:13px;height:13px;background:#fff;border:2px solid #238ccb;pointer-events:auto;padding:0;touch-action:none}
+    .workspace-group-handle.nw{left:-7px;top:-7px;cursor:nwse-resize}.workspace-group-handle.ne{right:-7px;top:-7px;cursor:nesw-resize}
+    .workspace-group-handle.sw{left:-7px;bottom:-7px;cursor:nesw-resize}.workspace-group-handle.se{right:-7px;bottom:-7px;cursor:nwse-resize}
+    .workspace-group-bar{position:absolute;left:0;top:-34px;display:flex;gap:3px;white-space:nowrap;pointer-events:auto}
+    .workspace-group-bar button{border:1px solid #238ccb;border-radius:4px;background:var(--surface);color:var(--ink);padding:5px 8px;font-size:10px;cursor:pointer}
+    .workspace-group-bar button[data-group-action="move"]{cursor:move;touch-action:none}
+    .has-group-selection .decor-handle,.has-group-selection .artwork-transform,.has-group-selection .decor-actionbar{display:none!important}
+    .artwork-overlay.multi-selected::after{opacity:1;border-color:#58b9f1}
+    #decorAlignGroup .decor-align-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:44px;font-size:9px}
+    .decor-align-btn:disabled{opacity:.35;cursor:not-allowed}
+    .decor-align-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .decor-spacing-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+    .decor-spacing-actions button{min-height:36px}
+    .decor-measurements{position:absolute;inset:0;pointer-events:none;z-index:8}
+    .decor-distance{position:absolute;color:#fff;border-color:#e85aab;border-style:solid;border-width:0}
+    .decor-distance-x{border-top-width:1px}.decor-distance-y{border-left-width:1px}
+    .decor-distance span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#862452;color:white;padding:2px 4px;border-radius:3px;white-space:nowrap;font:10px monospace}
     .decor-actionbar{position:absolute;transform:translate(-50%,0);display:flex;gap:4px;z-index:7;pointer-events:auto}
     .decor-actionbar.hidden{display:none}
     .decor-actionbar button{border:1px solid var(--line);border-radius:5px;background:var(--surface);padding:4px 9px;font-size:10px;font-weight:800;color:var(--ink);cursor:pointer;box-shadow:0 2px 10px rgba(23,33,30,.18);white-space:nowrap;line-height:1.4;transition:background .15s,border-color .15s,color .15s}
@@ -84,13 +135,37 @@
     .artwork-library-item .artwork-library-remove{position:absolute;top:3px;right:3px;width:18px;height:18px;display:none;place-items:center;border:0;border-radius:4px;background:rgba(23,33,30,.72);color:#fff;font-size:10px;cursor:pointer;padding:0;line-height:1}
     .artwork-library-item:hover .artwork-library-remove{display:grid}
     .artwork-library-empty{grid-column:1/-1;border:1px dashed var(--line);border-radius:6px;padding:12px 8px;font-size:10px;color:var(--muted);text-align:center}
-  </style>
+
+    .garment-color-chip{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:transform .15s,border-color .15s;padding:0}.garment-color-chip:hover{transform:scale(1.15)}.garment-color-chip.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--surface),0 0 0 3px var(--accent)}.preset-btn{padding:6px 2px;font-size:9px;text-align:center;white-space:nowrap;line-height:1.2}
+    .artboard[data-bg="sand"]{background:radial-gradient(120% 90% at 50% 42%,#e7d4b8 0%,#d6b58a 54%,#b98759 100%)}
+    .artboard[data-bg="lavender"]{background:radial-gradient(120% 90% at 50% 42%,#ece7f5 0%,#cfc4e6 54%,#a995ca 100%)}
+    .artboard[data-bg="sunset"]{background:radial-gradient(120% 90% at 50% 42%,#ffd6b7 0%,#ef9c8b 54%,#9f5369 100%)}
+    .artboard[data-bg="midnight"]{background:radial-gradient(120% 90% at 50% 42%,#263956 0%,#15243e 54%,#091321 100%)}
+    .artboard[data-bg="noir"]{background:radial-gradient(120% 90% at 50% 42%,#4d4d4d 0%,#232323 54%,#090909 100%)}
+    .artboard[data-bg="concrete"]{background:radial-gradient(120% 90% at 50% 42%,#d4d0c8 0%,#bbb6ad 54%,#98948e 100%)}
+    .artboard[data-bg="gallery"]{background:radial-gradient(120% 90% at 50% 42%,#fffaf1 0%,#f5ebdc 54%,#e4d4bf 100%)}
+    .artboard[data-bg="cobalt"]{background:radial-gradient(120% 90% at 50% 42%,#4f83c7 0%,#24549d 54%,#142f63 100%)}
+    .artboard[data-bg="sand"] .background-sun,.artboard[data-bg="lavender"] .background-sun,.artboard[data-bg="sunset"] .background-sun,.artboard[data-bg="midnight"] .background-sun,.artboard[data-bg="noir"] .background-sun,.artboard[data-bg="concrete"] .background-sun,.artboard[data-bg="gallery"] .background-sun,.artboard[data-bg="cobalt"] .background-sun{display:none}
+    .swatch[data-background="sand"]{background:linear-gradient(140deg,#e7d4b8,#b98759)}
+    .swatch[data-background="lavender"]{background:linear-gradient(140deg,#ece7f5,#a995ca)}
+    .swatch[data-background="sunset"]{background:linear-gradient(140deg,#ffd6b7,#9f5369)}
+    .swatch[data-background="midnight"]{background:linear-gradient(140deg,#263956,#091321)}
+    .swatch[data-background="noir"]{background:linear-gradient(140deg,#4d4d4d,#090909)}
+    .swatch[data-background="concrete"]{background:linear-gradient(140deg,#d4d0c8,#98948e)}
+    .swatch[data-background="gallery"]{background:linear-gradient(140deg,#fffaf1,#e4d4bf)}
+    .swatch[data-background="cobalt"]{background:linear-gradient(140deg,#4f83c7,#142f63)}
+    .artboard.gradient-background .background-sun{display:none}
+    .background-library-heading{flex:0 0 100%;margin-top:7px;color:var(--muted);font:600 9px var(--mono);letter-spacing:.08em}
+    .swatch.gradient-swatch{position:relative;width:70px;height:70px;border-width:1px;background-size:cover;background-position:center;overflow:hidden;padding:0}
+    .swatch.gradient-swatch span{position:absolute;left:0;right:0;bottom:0;padding:12px 4px 4px;background:linear-gradient(transparent,rgba(15,20,18,.74));color:#fff;font:600 8px var(--mono);line-height:1.15;text-align:left}
+    .swatch.gradient-swatch.active{border-width:2px}
+</style>
 </head>
 <body>
   <div class="app">
     <header class="topbar">
       <div class="topbar__start"><div class="brand">FORM<span>/</span></div><div class="crumb">WORKSPACE / DROP_07 / LOOK_014</div></div>
-      <div class="topbar__actions"><div class="theme-switch" role="group" aria-label="Chủ đề giao diện" data-testid="theme-switch"><button id="themeLight" class="active" type="button" title="Giao diện sáng" aria-label="Giao diện sáng"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg></button><button id="themeDark" type="button" title="Giao diện tối" aria-label="Giao diện tối" data-testid="theme-dark"><svg viewBox="0 0 16 16"><path d="M13.5 9.5A6 6 0 1 1 6.5 2.5a5 5 0 0 0 7 7Z"/></svg></button></div><div class="theme-switch" role="group" aria-label="Hoàn tác"><button id="undoButton" type="button" title="Hoàn tác (Ctrl+Z)" data-testid="undo" aria-label="Hoàn tác" disabled><svg viewBox="0 0 16 16"><path d="M3 7v5h5"/><path d="M3.5 12a6.5 6.5 0 1 1 2 4.6" transform="scale(0.85) translate(1.5,-1)"/></svg></button><button id="redoButton" type="button" title="Làm lại (Ctrl+Y)" data-testid="redo" aria-label="Làm lại" disabled><svg viewBox="0 0 16 16"><path d="M13 7v5H8"/><path d="M12.5 12a6.5 6.5 0 1 0-2 4.6" transform="scale(0.85) translate(-1.5,-1)"/></svg></button></div><span class="local-pill">LOCAL-ONLY</span><span class="tiny-meta" id="draftStamp">CHƯA LƯU</span><button class="button" id="saveDraft" data-testid="save-draft" type="button">Lưu vào máy</button><button class="button button--subtle" id="clearDraft" type="button">Xóa bản lưu</button><button class="button button--primary" id="exportButton" data-testid="export-button" type="button">Xuất PNG · 9:16</button></div>
+      <div class="topbar__actions"><div class="theme-switch" role="group" aria-label="Chủ đề giao diện" data-testid="theme-switch"><button id="themeLight" class="active" type="button" title="Giao diện sáng" aria-label="Giao diện sáng"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg></button><button id="themeDark" type="button" title="Giao diện tối" aria-label="Giao diện tối" data-testid="theme-dark"><svg viewBox="0 0 16 16"><path d="M13.5 9.5A6 6 0 1 1 6.5 2.5a5 5 0 0 0 7 7Z"/></svg></button></div><div class="theme-switch" role="group" aria-label="Hoàn tác"><button id="undoButton" type="button" title="Hoàn tác (Ctrl+Z)" data-testid="undo" aria-label="Hoàn tác" disabled><svg viewBox="0 0 16 16"><path d="M3 7v5h5"/><path d="M3.5 12a6.5 6.5 0 1 1 2 4.6" transform="scale(0.85) translate(1.5,-1)"/></svg></button><button id="redoButton" type="button" title="Làm lại (Ctrl+Y)" data-testid="redo" aria-label="Làm lại" disabled><svg viewBox="0 0 16 16"><path d="M13 7v5H8"/><path d="M12.5 12a6.5 6.5 0 1 0-2 4.6" transform="scale(0.85) translate(-1.5,-1)"/></svg></button></div><span class="local-pill">LOCAL-ONLY</span><span class="tiny-meta" id="draftStamp">CHƯA LƯU</span><button class="button" id="saveDraft" data-testid="save-draft" type="button">Lưu vào máy</button><button class="button button--subtle" id="clearDraft" type="button">Xóa bản lưu</button><button class="button" id="batchExportTrigger" type="button" title="Xuất hàng loạt ảnh mockup từ nhiều file thiết kế">⚡ Xuất hàng loạt</button><input class="sr-only" id="batchExportFiles" type="file" multiple accept="image/png,image/jpeg,image/webp" /><button class="button button--primary" id="exportButton" data-testid="export-button" type="button">Xuất PNG · 9:16</button></div>
     </header>
     <main>
       <aside class="sidebar" aria-label="Tổng quan studio">
@@ -107,6 +182,25 @@
           </div>
           <p class="message" id="baseChromaMessage" role="status"></p>
           <input class="sr-only" id="baseFile" data-testid="base-input" type="file" accept="image/png,image/jpeg,image/webp" />
+
+          <div class="field" style="margin-top:10px">
+            <div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+              <span>Màu phôi áo</span>
+              <span id="garmentColorLabel" style="font-weight:700;color:var(--ink)">Mặc định</span>
+            </div>
+            <div class="garment-color-grid" id="garmentColorGrid" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+              <button class="garment-color-chip active" type="button" data-color="" title="Màu gốc" style="background:linear-gradient(135deg,#eee 50%,#ccc 50%)"></button>
+              <button class="garment-color-chip" type="button" data-color="#ffffff" title="Trắng sáng" style="background:#ffffff;border:1px solid #d7ded8"></button>
+              <button class="garment-color-chip" type="button" data-color="#181818" title="Đen huyền" style="background:#181818"></button>
+              <button class="garment-color-chip" type="button" data-color="#3a3a3a" title="Than chì" style="background:#3a3a3a"></button>
+              <button class="garment-color-chip" type="button" data-color="#9ea098" title="Xám tiêu" style="background:#9ea098"></button>
+              <button class="garment-color-chip" type="button" data-color="#d7cbb5" title="Cát / Be" style="background:#d7cbb5"></button>
+              <button class="garment-color-chip" type="button" data-color="#1b293e" title="Xanh Navy" style="background:#1b293e"></button>
+              <button class="garment-color-chip" type="button" data-color="#283e30" title="Xanh Rêu" style="background:#283e30"></button>
+              <button class="garment-color-chip" type="button" data-color="#4d1620" title="Đỏ Đô" style="background:#4d1620"></button>
+              <input type="color" id="garmentCustomColor" title="Chọn màu tùy ý" value="#ffffff" style="width:22px;height:22px;padding:0;border:0;border-radius:50%;cursor:pointer;background:transparent" />
+            </div>
+          </div>
           <div class="base-library">
             <div class="eyebrow" style="margin:12px 0 7px">Thư viện phôi <span style="color:#9aa89f" id="baseLibraryCount"></span></div>
             <div class="base-library-grid" id="baseLibraryGrid" data-testid="base-library"></div>
@@ -122,7 +216,21 @@
         <div class="stage-well" id="stageWell" data-testid="workspace-viewport"><div class="artboard" id="artboard" data-testid="artboard" data-bg="linen" data-ratio="portrait"><img class="background-image" id="backgroundImage" alt="" /><div class="background-sun"></div><img class="source-image" id="baseImage" data-testid="source-layer" alt="Phôi đã khóa — giữ chuột để di chuyển, kéo góc để đổi tỷ lệ" draggable="false" /><div class="base-selection" id="baseSelection" data-testid="base-selection" aria-hidden="true"><button class="base-handle" data-base-handle="nw" type="button" aria-label="Thu phóng phôi từ góc trên trái"></button><button class="base-handle" data-base-handle="ne" type="button" aria-label="Thu phóng phôi từ góc trên phải"></button><button class="base-handle" data-base-handle="sw" type="button" aria-label="Thu phóng phôi từ góc dưới trái"></button><button class="base-handle" data-base-handle="se" type="button" aria-label="Thu phóng phôi từ góc dưới phải"></button></div><div class="safe-area" id="safeArea" data-testid="safe-area"><span id="safeAreaLabel">VÙNG IN AN TOÀN</span></div><div class="artwork-overlay is-print" id="artworkOverlay" data-testid="artwork-layer" role="slider" aria-label="Kéo để đặt artwork"><img class="artwork-image" id="artworkImage" alt="Artwork đã tải lên" draggable="false" /><div class="artwork-default"><span id="artworkDefaultLabel">ROUGE / 07</span></div><div class="artwork-transform" aria-hidden="true"><button class="artwork-handle" data-artwork-handle="nw" type="button" aria-label="Đổi kích thước artwork từ góc trên trái"></button><button class="artwork-handle" data-artwork-handle="ne" type="button" aria-label="Đổi kích thước artwork từ góc trên phải"></button><button class="artwork-handle" data-artwork-handle="sw" type="button" aria-label="Đổi kích thước artwork từ góc dưới trái"></button><button class="artwork-handle" data-artwork-handle="se" type="button" aria-label="Đổi kích thước artwork từ góc dưới phải"></button><button class="artwork-rotate" data-artwork-rotate type="button" aria-label="Xoay artwork"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 6.4A5.6 5.6 0 1 0 14 10"/><path d="M13 2.5v3.9H9.1"/></svg></button></div></div><div id="overlaysContainer"></div><canvas class="watermark-canvas" id="watermarkCanvas" data-testid="watermark-layer" aria-hidden="true"></canvas><div class="logo-overlay" id="logoOverlay" data-testid="logo-layer" role="slider" aria-label="Kéo để đặt logo"><img id="logoImage" alt="Logo đã tải lên" draggable="false" /><span class="logo-word">FORM</span></div><div class="view-label" id="viewLabel">MẶT TRƯỚC</div><div class="stage-lock"><svg viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V4.8a2.5 2.5 0 015 0V7"/></svg><span><b>LOCKED</b> · PHÔI · MẶT · POSE · FORM ÁO</span></div></div></div>
       </section>
       <aside class="inspector" aria-label="Điều khiển thiết kế">
-        <section class="panel"><div class="panel-heading"><div><h2>Hình in / Hình thêu</h2><p>Chọn artwork trên preview để kéo vị trí, góc xoay hoặc bốn góc để đổi kích thước. PNG xuất dùng fold warp và ánh sáng vải cục bộ, chạy tại máy.</p></div><span class="soft-badge">OVERLAY</span></div><div class="segmented"><button class="active" id="printType" type="button">Hình in</button><button id="embroideryType" type="button">Hình thêu</button></div><div id="artworkList" class="artwork-list"></div><div class="artwork-actions"><button class="upload-button" id="artworkFileTrigger" type="button">＋ Thêm artwork</button></div><input class="sr-only" id="artworkFile" data-testid="artwork-input" type="file" accept="image/png,image/jpeg,image/webp" /><div class="artwork-library"><div class="eyebrow" style="margin:12px 0 7px">Thư viện artwork <span style="color:#9aa89f" id="artworkLibraryCount"></span></div><div class="artwork-library-grid" id="artworkLibraryGrid" data-testid="artwork-library"></div><p class="message" id="artworkLibraryMessage" role="status">Bấm để dùng lại — size/kích thước đã chỉnh được nhớ theo từng hình.</p></div><p class="message" id="artworkMessage" role="status"></p><div id="artworkControls"><div class="panel-upload" data-drop-target="artwork" data-testid="artwork-drop-zone"><div><strong class="asset-name" id="artworkFileName">Rouge 07 · mặc định</strong><span id="artworkFileHint">Ảnh PNG, JPG hoặc WEBP</span></div><button class="upload-button" id="artworkReplaceTrigger" type="button">Thay ảnh</button></div><div class="artwork-actions" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="upload-button" id="artworkChromaKey" type="button">🟢 Khử nền xanh</button><button class="upload-button" id="artworkChromaBlack" type="button">⚫ Khử nền đen</button></div><p class="message" id="chromaMessage" role="status"></p><div class="field"><label for="sizeRange">Kích thước <output id="sizeOutput">34 cm</output></label><input class="range" id="sizeRange" type="range" min="0.1" max="3.2" value="1" step="0.01" /></div><div class="field-grid"><div class="field"><label for="rotationRange">Góc xoay <output id="rotationOutput">−4°</output></label><input class="range" id="rotationRange" type="range" min="-60" max="60" value="-4" step="1" /></div><div class="field"><label for="opacityRange">Độ đậm <output id="opacityOutput">88%</output></label><input class="range" id="opacityRange" type="range" min="0.15" max="1" value="0.88" step="0.01" /></div></div><div class="field-grid"><div class="field"><label for="artworkX">Trục ngang</label><input class="input" id="artworkX" inputmode="decimal" value="51.5%" /></div><div class="field"><label for="artworkY">Trục dọc</label><input class="input" id="artworkY" inputmode="decimal" value="42%" /></div></div><div class="material-options"><button class="material-option active" id="inkOption" type="button"><div class="material-texture"></div>Mực in lụa</button><button id="threadOption" class="material-option" type="button"><div class="material-texture thread"></div>Chỉ thêu nổi</button></div></div></section>
+        <section class="panel"><div class="panel-heading"><div><h2>Hình in / Hình thêu</h2><p>Chọn artwork trên preview để kéo vị trí, góc xoay hoặc bốn góc để đổi kích thước. PNG xuất dùng fold warp và ánh sáng vải cục bộ, chạy tại máy.</p></div><span class="soft-badge">OVERLAY</span></div><div class="segmented"><button class="active" id="printType" type="button">Hình in</button><button id="embroideryType" type="button">Hình thêu</button></div><div id="artworkList" class="artwork-list"></div><div class="artwork-actions"><button class="upload-button" id="artworkFileTrigger" type="button">＋ Thêm artwork</button></div><input class="sr-only" id="artworkFile" data-testid="artwork-input" type="file" accept="image/png,image/jpeg,image/webp" /><div class="artwork-library"><div class="eyebrow" style="margin:12px 0 7px">Thư viện artwork <span style="color:#9aa89f" id="artworkLibraryCount"></span></div><div class="artwork-library-grid" id="artworkLibraryGrid" data-testid="artwork-library"></div><p class="message" id="artworkLibraryMessage" role="status">Bấm để dùng lại — size/kích thước đã chỉnh được nhớ theo từng hình.</p></div><p class="message" id="artworkMessage" role="status"></p><div id="artworkControls"><div class="panel-upload" data-drop-target="artwork" data-testid="artwork-drop-zone"><div><strong class="asset-name" id="artworkFileName">Rouge 07 · mặc định</strong><span id="artworkFileHint">Ảnh PNG, JPG hoặc WEBP</span></div><button class="upload-button" id="artworkReplaceTrigger" type="button">Thay ảnh</button></div><div class="artwork-actions" style="margin-top:10px;display:grid;grid-template-columns:repeat(4,1fr);gap:5px"><button class="upload-button" id="artworkChromaKey" type="button" title="Khử nền xanh lá">🟢 Xanh</button><button class="upload-button" id="artworkChromaBlack" type="button" title="Khử nền đen">⚫ Đen</button><button class="upload-button" id="artworkChromaWhite" type="button" title="Khử nền trắng">⚪ Trắng</button><button class="upload-button" id="artworkInvertBtn" type="button" title="Đảo màu Đen ↔ Trắng">🔄 Đảo màu</button></div><p class="message" id="chromaMessage" role="status"></p>
+          <div class="field" style="margin-top:12px">
+            <div class="eyebrow" style="margin-bottom:6px">Vị trí in chuẩn thời trang</div>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px">
+              <button class="button button--subtle preset-btn" id="presetLeftChest" type="button" title="Ngực trái chuẩn">Ngực trái</button>
+              <button class="button button--subtle preset-btn" id="presetRightChest" type="button" title="Ngực phải">Ngực phải</button>
+              <button class="button button--subtle preset-btn" id="presetCenterChest" type="button" title="Giữa ngực chuẩn">Giữa ngực</button>
+              <button class="button button--subtle preset-btn" id="presetOversize" type="button" title="In khổ lớn A3">Oversize</button>
+              <button class="button button--subtle preset-btn" id="presetNeck" type="button" title="Cổ / Gáy áo">Cổ áo</button>
+            </div>
+            <div style="margin-top:4px">
+              <button class="button button--subtle preset-btn" id="presetCenterHorizontal" type="button" style="width:100%" title="Căn chính giữa trục X (X = 50%)">📐 Căn chính giữa trục ngực (X = 50%)</button>
+            </div>
+          </div>
+          <div class="field"><label for="sizeRange">Kích thước <output id="sizeOutput">34 cm</output></label><input class="range" id="sizeRange" type="range" min="0.1" max="3.2" value="1" step="0.01" /></div><div class="field-grid"><div class="field"><label for="rotationRange">Góc xoay <output id="rotationOutput">−4°</output></label><input class="range" id="rotationRange" type="range" min="-60" max="60" value="-4" step="1" /></div><div class="field"><label for="opacityRange">Độ đậm <output id="opacityOutput">88%</output></label><input class="range" id="opacityRange" type="range" min="0.15" max="1" value="0.88" step="0.01" /></div></div><div class="field-grid"><div class="field"><label for="artworkX">Trục ngang</label><input class="input" id="artworkX" inputmode="decimal" value="51.5%" /></div><div class="field"><label for="artworkY">Trục dọc</label><input class="input" id="artworkY" inputmode="decimal" value="42%" /></div></div><div class="material-options"><button class="material-option active" id="inkOption" type="button"><div class="material-texture"></div>Mực in lụa</button><button id="threadOption" class="material-option" type="button"><div class="material-texture thread"></div>Chỉ thêu nổi</button></div></div></section>
         <section class="panel" id="decorPanel">
           <div class="panel-heading"><div><h2>Chữ &amp; Icon</h2><p>Thêm chữ tuỳ chỉnh font/cỡ/màu hoặc chọn icon từ thư viện. Kéo trực tiếp trên preview để đặt vị trí.</p></div><span class="soft-badge">LAYER</span></div>
           <div class="artwork-actions" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -166,7 +274,8 @@
                 <label>Màu <span style="display:flex;align-items:center;gap:8px"><input type="color" id="decorColorPicker" value="#17211e" style="width:32px;height:32px;border:1px solid var(--line);border-radius:5px;padding:2px;background:transparent;cursor:pointer" /><input class="input" id="decorColorHex" type="text" value="#17211e" style="font:600 11px var(--mono);width:86px" /></span></label>
               </div>
               <div class="field">
-                <label>Căn chỉnh theo khung</label>
+                <label id="decorAlignLabel">Căn chỉnh theo khung</label>
+                <p class="message">Ctrl/Cmd + click để chọn nhiều lớp. Kéo để bắt mép/tâm; giữ Alt để kéo tự do.</p>
                 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:6px" id="decorAlignGroup">
                   <button class="decor-align-btn" data-decor-align="left" type="button" title="Căn trái"><svg viewBox="0 0 16 16"><path d="M2 2v12"/><rect x="4" y="5" width="9" height="3" rx="1"/></svg></button>
                   <button class="decor-align-btn" data-decor-align="centerX" type="button" title="Căn giữa ngang"><svg viewBox="0 0 16 16"><path d="M8 2v12"/><rect x="3.5" y="5" width="9" height="3" rx="1"/></svg></button>
@@ -178,6 +287,13 @@
                   <button class="decor-align-btn" data-decor-align="distributeY" type="button" title="Phân bố đều dọc (≥3 lớp)"><svg viewBox="0 0 16 16"><rect x="3" y="2" width="10" height="2.5" rx="1"/><rect x="3" y="6.75" width="10" height="2.5" rx="1"/><rect x="3" y="11.5" width="10" height="2.5" rx="1"/></svg></button>
                 </div>
                 <p class="message" id="decorMultiHint" style="display:none"></p>
+                <label for="decorGap">Khoảng hở (đơn vị thiết kế)</label>
+                <input class="input" id="decorGap" type="number" min="0" max="400" step="1" value="8" />
+                <div class="decor-spacing-actions">
+                  <button class="decor-align-btn" id="decorSpaceX" type="button">Xếp hàng ngang</button>
+                  <button class="decor-align-btn" id="decorSpaceY" type="button">Xếp cột dọc</button>
+                </div>
+                <p class="message">Chọn ≥2 lớp để đặt khoảng hở. 400 đơn vị = chiều rộng khung; không đổi khi zoom.</p>
               </div>
               <div class="field" id="decorRotationField">
                 <label for="decorRotationRange">Góc xoay <output id="decorRotationOutput">0°</output></label>
@@ -451,8 +567,12 @@
   <script src="./app-core.js"></script>
   <script src="./draft-store.js"></script>
   <script src="./fabric-engine.js"></script>
+  <script src="./mask-assets.js"></script>
   <script src="./chroma-key.js"></script>
   <script src="./icons.js"></script>
+  <script src="./decor-layout.js"></script>
+  <script src="./selection-geometry.js"></script>
+  <script src="./background-gradients.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

@@ -9,6 +9,48 @@
     return g - Math.max(r, b);
   }
 
+  // Solve C = alpha F + (1-alpha) B at the boundary. Unlike blurring a
+  // cut-out, this preserves individual strands and removes baked-in green.
+  function recoverGreenEdge(source, width, height, x, y, high) {
+    const i = (y * width + x) * 4;
+    const c = [source[i], source[i + 1], source[i + 2]];
+    let background = null, nearest = Infinity;
+    const foregrounds = [];
+    for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+      const j = (yy * width + xx) * 4;
+      if (source[j + 3] < 250) continue;
+      const r = source[j], g = source[j + 1], b = source[j + 2];
+      const excess = greenExcess(r, g, b), distance = dx * dx + dy * dy;
+      if (excess >= high && excess / Math.max(g, 1) > 0.65 && distance < nearest) {
+        background = [r, g, b]; nearest = distance;
+      } else if (excess <= 0) foregrounds.push([r, g, b, distance]);
+    }
+    if (!background || !foregrounds.length) return null;
+    let best = null, bestScore = Infinity;
+    for (const f of foregrounds) {
+      let numerator = 0, denominator = 0;
+      for (let k = 0; k < 3; k++) {
+        const d = f[k] - background[k];
+        numerator += (c[k] - background[k]) * d;
+        denominator += d * d;
+      }
+      if (denominator < 400) continue;
+      const alpha = clamp(numerator / denominator, 0, 1);
+      let error = 0;
+      for (let k = 0; k < 3; k++) {
+        error += (c[k] - alpha * f[k] - (1 - alpha) * background[k]) ** 2;
+      }
+      const score = error + f[3] * 2;
+      if (error < 900 && score < bestScore) {
+        bestScore = score;
+        best = { alpha, color: f.slice(0, 3) };
+      }
+    }
+    return best;
+  }
+
   // Lấy mẫu các pixel viền (4 cạnh) để đoán màu nền và xác định có phải green
   // screen hay không. Trả về { isGreen, keyR, keyG, keyB, keyExcess }.
   function detectBackground(data, width, height) {
@@ -59,9 +101,10 @@
     // Ngưỡng dựa trên độ xanh trội của nền tham chiếu, có sàn tối thiểu để bắt
     // được cả nền xanh tối (keyExcess nhỏ).
     const key = Math.max(bg.keyExcess, 18);
-    const low = clamp(key * (options.lowFactor ?? 0.30), 8, 255);    // dưới → giữ nguyên
-    const high = clamp(key * (options.highFactor ?? 0.75), low + 6, 255); // trên → trong suốt hẳn
+    const low = clamp(key * (options.lowFactor ?? 0.18), 6, 255);
+    const high = clamp(key * (options.highFactor ?? 0.70), low + 6, 255);
     const despill = options.despill !== false;
+    const source = options.refineEdges === false ? null : new Uint8ClampedArray(data);
 
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
@@ -72,6 +115,31 @@
       if (ex >= high) alphaMul = 0;
       else if (ex > low) alphaMul = 1 - (ex - low) / (high - low);
 
+      // Artwork can contain shaded green inside closed shapes (e.g. roofs).
+      // Relative chroma detects those shadows independently of exposure.
+      // Opt-in only: preserve the existing garment/background key behavior.
+      if (options.shadowGreen && g > 0 && ex > 2) {
+        const relativeGreen = ex / g;
+        const shadowAlpha = 1 - clamp((relativeGreen - 0.12) / 0.28, 0, 1);
+        alphaMul = Math.min(alphaMul, shadowAlpha);
+      }
+
+      // Restrict reconstruction to mixed green pixels, never opaque interior
+      // skin, neutral clothing, transparent brush erasures or solid key colour.
+      const edge = source && ex > 0 && ex / Math.max(g, 1) < 0.85
+        && data[i + 3] > 0 && (!options.shadowGreen || alphaMul > 0)
+        ? recoverGreenEdge(source, width, height, (i / 4) % width, Math.floor(i / 4 / width), high)
+        : null;
+      if (edge) {
+        data[i + 3] = Math.round(source[i + 3] * edge.alpha);
+        if (despill) {
+          data[i] = edge.color[0];
+          data[i + 1] = Math.min(edge.color[1], Math.max(edge.color[0], edge.color[2]));
+          data[i + 2] = edge.color[2];
+        }
+        continue;
+      }
+
       if (alphaMul <= 0) {
         data[i + 3] = 0;
         continue;
@@ -80,7 +148,9 @@
       // Despill: kéo green thừa xuống ngang kênh trội hơn để xoá rìa xanh.
       if (despill && ex > 0) {
         const cap = Math.max(r, b);
-        data[i + 1] = Math.round(g - (g - cap) * clamp(ex / high, 0, 1));
+        // Partial suppression left a green halo, especially on blond hair.
+        // Neutralize remaining spill completely without eroding strand alpha.
+        data[i + 1] = cap;
       }
 
       data[i + 3] = Math.round(data[i + 3] * alphaMul);
@@ -398,7 +468,12 @@
     return { keyR: sumR / n, keyG: sumG / n, keyB: sumB / n, spread: 40 };
   }
 
+  function greenSource(asset, libraryEntry) {
+    return asset.greenSourceBlob || libraryEntry?.blob || asset.blob;
+  }
+
   globalThis.FormChromaKey = {
+    greenSource,
     detectBackground, removeGreenScreen, processBlob, greenExcess, estimateGreenKey,
     detectBlackBackground, removeBlackScreen, estimateBlackLuma,
     detectWhiteBackground, removeWhiteScreen, estimateWhiteLuma,

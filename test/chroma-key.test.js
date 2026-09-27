@@ -3,12 +3,67 @@ import assert from 'node:assert/strict';
 
 import '../chroma-key.js';
 
+test('repeating green key starts from original pixels, not the previous cutout', () => {
+  const original = new Blob(['original']), processed = new Blob(['cutout']);
+  const select = globalThis.FormChromaKey.greenSource;
+  assert.equal(select({ blob: processed, greenSourceBlob: original }), original);
+  assert.equal(select({ blob: processed }, { blob: original }), original);
+  assert.equal(select({ blob: original }), original);
+});
+
+test('mixed hair pixels recover strand opacity and foreground colour instead of an opaque grey rim', () => {
+  const width = 15, height = 9;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const color = x < 7 ? [160, 130, 100] : x === 7 ? [80, 155, 60] : [0, 180, 20];
+    data.set([...color, 255], (y * width + x) * 4);
+  }
+  globalThis.FormChromaKey.removeGreenScreen({ data, width, height });
+  const i = (4 * width + 7) * 4;
+  assert.ok(Math.abs(data[i + 3] - 128) < 15, 'half-covered strand keeps half opacity');
+  assert.ok(Math.abs(data[i] - 160) < 15, 'recover hair red rather than darkening fringe');
+  assert.ok(Math.abs(data[i + 1] - 130) < 15);
+  assert.deepEqual([...data.slice((4 * width + 3) * 4, (4 * width + 3) * 4 + 4)], [160, 130, 100, 255]);
+});
+
 const {
   detectWhiteBackground, removeWhiteScreen,
   detectColorBackground, removeColorScreen,
 } = globalThis.FormChromaKey;
 
+test('artwork green key removes shadow-green roof pixels without erasing dark neutral ink', () => {
+  const image = { width: 3, height: 1, data: new Uint8ClampedArray([
+    2, 16, 7, 255, 47, 82, 46, 255, 12, 12, 12, 255,
+  ]) };
+  globalThis.FormChromaKey.removeGreenScreen(image, {
+    forceKey: { keyExcess: 100 }, shadowGreen: true,
+  });
+  assert.equal(image.data[3], 0);
+  assert.equal(image.data[7], 0);
+  assert.equal(image.data[11], 255);
+});
+
 // Ảnh 40×40: nền trắng, hình vuông đỏ 16×16 ở giữa.
+test('green-key hair edges have no green spill while keeping semi-transparent strands', () => {
+  const image = { width: 3, height: 1, data: new Uint8ClampedArray([
+    90, 125, 70, 255, 160, 168, 150, 180, 180, 125, 95, 255,
+  ]) };
+  globalThis.FormChromaKey.removeGreenScreen(image, { forceKey: { keyExcess: 100 } });
+  assert.ok(image.data[1] <= Math.max(image.data[0], image.data[2]));
+  assert.ok(image.data[5] <= Math.max(image.data[4], image.data[6]));
+  assert.ok(image.data[3] > 0 && image.data[3] < 255);
+  assert.deepEqual([...image.data.slice(8)], [180, 125, 95, 255]);
+});
+
+test('green key preserves blue artwork and existing erased transparency', () => {
+  const image = { width: 2, height: 1, data: new Uint8ClampedArray([
+    10, 150, 200, 255, 30, 80, 20, 0,
+  ]) };
+  globalThis.FormChromaKey.removeGreenScreen(image, { forceKey: { keyExcess: 100 }, shadowGreen: true });
+  assert.deepEqual([...image.data.slice(0, 4)], [10, 150, 200, 255]);
+  assert.equal(image.data[7], 0);
+});
+
 function whiteBackgroundImage() {
   const width = 40, height = 40;
   const data = new Uint8ClampedArray(width * height * 4);

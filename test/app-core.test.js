@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 
 import '../app-core.js';
 
+test('group transforms artwork position and scale atomically near canvas edges', () => {
+  let scene = FormCore.createScene();
+  const id = scene.overlays[0].id;
+  scene = FormCore.updateDirectOverlay(scene, {x:50,y:50,scale:3}, id);
+  scene = FormCore.updateDirectOverlay(scene, {x:8,y:8,scale:.5}, id);
+  const item = FormCore.getOverlayById(scene,id);
+  assert.equal(item.x,8);
+  assert.equal(item.y,8);
+  assert.equal(item.scale,.5);
+});
+
 const {
   MAX_IMAGE_BYTES,
   MIN_TEXT_FONT_SIZE,
@@ -47,6 +58,11 @@ const {
   setLogo,
   updateOverlay,
   validateImageFile,
+  PRESET_POSITIONS,
+  applyPositionPreset,
+  centerOverlayX,
+  toggleOverlayInvert,
+  setGarmentColor,
 } = globalThis.FormCore;
 
 test('accepts supported image types inside the configured upload limit', () => {
@@ -128,13 +144,13 @@ test('reset returns the unmodified blank default garment in its locked state', (
   assert.equal(reset.base.locked, true);
 });
 
-test('keeps artwork within safe placement ranges when a user drags or resizes it', () => {
+test('keeps artwork within composition bounds when inspector controls change it', () => {
   const scene = createScene();
   const next = updateOverlay(scene, { x: -14, y: 151, scale: 1.9, rotation: 40 });
-  assert.equal(next.overlay.x, 47.225);
-  assert.equal(next.overlay.y, 50.08);
-  assert.equal(next.overlay.scale, 1.5);
-  assert.equal(next.overlay.rotation, 25);
+  assert.equal(next.overlay.x, 19.475);
+  assert.equal(next.overlay.y, 83.634);
+  assert.equal(next.overlay.scale, 1.9);
+  assert.equal(next.overlay.rotation, 40);
 });
 
 test('allows direct artwork controls to scale, move and rotate beyond the inspector safe-range', () => {
@@ -179,9 +195,9 @@ test('creates a deterministic render style from the editable overlay only', () =
 test('keeps separate artwork placement for front and back views', () => {
   const front = updateOverlay(createScene(), { x: 62 });
   const back = updateOverlay(selectView(front, 'back'), { x: 37, kind: 'embroidery' });
-  assert.equal(getActiveOverlay(back).x, 42.1);
+  assert.equal(getActiveOverlay(back).x, 37);
   assert.equal(getActiveOverlay(back).kind, 'embroidery');
-  assert.equal(back.overlay.x, 57.9);
+  assert.equal(back.overlay.x, 62);
 });
 
 test('clamps background and watermark settings without touching the locked base', () => {
@@ -197,6 +213,25 @@ test('clamps background and watermark settings without touching the locked base'
   assert.equal(next.logo.name, 'FORM');
   assert.equal(next.logo.src, null);
   assert.equal(next.base.locked, true);
+});
+
+test('keeps Photoshop-style brightness and contrast with each artwork layer', () => {
+  const adjusted = updateOverlay(createScene(), { brightness: 42, contrast: -18 });
+  const restored = applyDraft(createScene(), serializeDraft(adjusted));
+
+  assert.deepEqual(
+    { brightness: restored.overlay.brightness, contrast: restored.overlay.contrast },
+    { brightness: 42, contrast: -18 },
+  );
+});
+
+test('limits per-artwork brightness and contrast to the slider range', () => {
+  const adjusted = updateOverlay(createScene(), { brightness: 999, contrast: -999 });
+
+  assert.deepEqual(
+    { brightness: adjusted.overlay.brightness, contrast: adjusted.overlay.contrast },
+    { brightness: 100, contrast: -100 },
+  );
 });
 
 test('creates a safe export name from the current garment and selected side', () => {
@@ -237,12 +272,12 @@ test('marks the print safe area as requiring calibration when the locked base is
   assert.equal(scene.base.locked, true);
 });
 
-test('keeps an artwork inside the calibrated garment-safe area', () => {
+test('keeps an artwork within composition bounds after garment-safe-area calibration', () => {
   const calibrated = setSafeArea(createScene(), { x: 50, y: 48, width: 28, height: 26 });
   const next = updateOverlay(calibrated, { x: 90, y: 80, scale: 1.5 });
-  assert.equal(next.overlay.scale, 1.257);
-  assert.equal(next.overlay.x, 51.116);
-  assert.equal(next.overlay.y, 50.173);
+  assert.equal(next.overlay.scale, 1.5);
+  assert.equal(next.overlay.x, 84.625);
+  assert.equal(next.overlay.y, 80);
 });
 
 test('clamps a calibrated safe-area definition to a usable region', () => {
@@ -261,6 +296,26 @@ test('serializes only editable control state and never persists local source ima
   assert.equal(draft.overlay.artwork.src, undefined);
   assert.equal(draft.base, undefined);
   assert.equal(draft.overlay.rotation, 19);
+});
+
+test('keeps every expanded lookbook and fashion-gradient background when restoring a workspace', () => {
+  const presets = [
+    'sand', 'lavender', 'sunset', 'midnight', 'noir', 'concrete', 'gallery', 'cobalt',
+    'champagne-glow', 'rose-gold', 'sage-mist', 'ocean-silk', 'lilac-dream',
+    'peach-fizz', 'blue-hour', 'mocha-studio', 'silver-fog', 'mint-coral',
+    'berry-noir', 'aurora-pastel',
+  ];
+
+  for (const preset of presets) {
+    const draft = serializeDraft(createScene());
+    draft.background = { value: preset, name: `Preset ${preset}` };
+    const restored = applyDraft(createScene(), draft).background;
+    assert.equal(restored.value, preset);
+    assert.equal(restored.name, `Preset ${preset}`);
+  }
+  const retiredPattern = serializeDraft(createScene());
+  retiredPattern.background = { value: 'editorial-grid', name: 'Old pattern' };
+  assert.equal(applyDraft(createScene(), retiredPattern).background.value, 'linen');
 });
 
 test('applies a valid draft to controls while preserving whatever locked source is loaded now', () => {
@@ -537,4 +592,67 @@ test('still accepts v2 drafts when decorations are absent', () => {
   assert.equal(restored.canvasRatio, 'square');
   assert.equal(restored.textItems.length, 0);
   assert.equal(restored.iconItems.length, 0);
+});
+
+
+test('applies fashion positioning presets accurately', () => {
+  let scene = createScene();
+  scene = applyPositionPreset(scene, 'leftChest');
+  let active = getActiveOverlay(scene);
+  assert.equal(active.x, PRESET_POSITIONS.leftChest.x);
+  assert.equal(active.y, PRESET_POSITIONS.leftChest.y);
+  assert.equal(active.scale, PRESET_POSITIONS.leftChest.scale);
+
+  scene = applyPositionPreset(scene, 'oversize');
+  active = getActiveOverlay(scene);
+  assert.equal(active.scale, PRESET_POSITIONS.oversize.scale);
+
+  scene = centerOverlayX(scene);
+  active = getActiveOverlay(scene);
+  assert.equal(active.x, 50);
+});
+
+test('mixed artwork/text groups survive draft restoration without selecting another side', () => {
+  const scene = addTextItem(createScene());
+  scene.layerGroups = [{id:'group-1',side:'front',keys:[`text:${getTextItems(scene)[0].id}`,`artwork:${scene.overlays[0].id}`]}];
+  const restored = applyDraft(createScene(), serializeDraft(scene));
+  assert.deepEqual(restored.layerGroups,scene.layerGroups);
+});
+
+test('malformed group records are discarded while valid member keys are deduplicated', () => {
+  const draft=serializeDraft(createScene());
+  draft.layerGroups=[null,{id:'bad',keys:['text:1']},{id:'ok',side:'back',keys:['text:1','text:1','artwork:2','unknown:5']}];
+  assert.deepEqual(applyDraft(createScene(),draft).layerGroups,[{id:'ok',side:'back',keys:['text:1','artwork:2']}]);
+});
+
+test('toggles artwork invert state and persists in drafts', () => {
+  let scene = createScene();
+  let active = getActiveOverlay(scene);
+  assert.equal(active.invert, false);
+
+  scene = toggleOverlayInvert(scene);
+  active = getActiveOverlay(scene);
+  assert.equal(active.invert, true);
+
+  const draft = serializeDraft(scene);
+  const restored = applyDraft(createScene(), draft);
+  const restoredActive = getActiveOverlay(restored);
+  assert.equal(restoredActive.invert, true);
+});
+
+test('sets garment color and persists across drafts', () => {
+  let scene = createScene();
+  assert.equal(scene.base.color, null);
+
+  scene = setGarmentColor(scene, '#181818');
+  assert.equal(scene.base.color, '#181818');
+
+  const draft = serializeDraft(scene);
+  assert.equal(draft.garmentColor, '#181818');
+
+  const restored = applyDraft(createScene(), draft);
+  assert.equal(restored.base.color, '#181818');
+
+  scene = setGarmentColor(scene, null);
+  assert.equal(scene.base.color, null);
 });

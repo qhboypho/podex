@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import '../fabric-engine.js';
 
-const { buildFoldField, warpArtworkPixels } = globalThis.FormFabricEngine;
+const { applyFoldLighting, buildFoldField, warpArtworkPixels } = globalThis.FormFabricEngine;
 
 test('keeps flat fabric neutral while extracting bounded directional fold data from an edge', () => {
   const flat = new Uint8ClampedArray(3 * 3 * 4).fill(180);
@@ -30,7 +30,7 @@ test('warps artwork pixels and reduces ink intensity in a dark fabric fold', () 
   assert.equal(output[4], 168);
 });
 
-test('treats an evenly dark garment as neutral but creates occlusion at a local dark trough', () => {
+test('treats an evenly dark garment as neutral and keeps local trough shading soft', () => {
   const solidBlack = new Uint8ClampedArray(7 * 7 * 4).fill(36);
   const neutral = buildFoldField(solidBlack, 7, 7, 1);
   assert.ok(neutral.shade[24] > .95);
@@ -43,5 +43,11 @@ test('treats an evenly dark garment as neutral but creates occlusion at a local 
     trough[index + 2] = 20;
   }
   const folded = buildFoldField(trough, 7, 7, 1);
-  assert.ok(folded.shade[24] < .7);
+  assert.ok(folded.shade[24] >= .72 && folded.shade[24] < 1);
+});
+
+test('dark fabric folds shade artwork color without punching a transparent black streak through it', () => {
+  const shaded = applyFoldLighting([220, 210, 190, 255], 0.08, 1, 0.60);
+
+  assert.equal(shaded[3], 255);
 });

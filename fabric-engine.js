@@ -29,6 +29,17 @@
     return pixels[index * 4 + 3] / 255;
   }
 
+  // Tạo ánh sáng nếp vải trên RGB nhưng luôn giữ nguyên alpha artwork.
+  // Giới hạn vùng tối để nếp sâu không biến thành vệt đen/cắt thủng hình in.
+  function applyFoldLighting(pixels, fabricLuminance, fold, emboss, offset = 0) {
+    const deviation = (fabricLuminance - 0.5) * fold * emboss * 1.4;
+    const factor = clamp(1 + deviation, 0.72, 1.12);
+    pixels[offset] = Math.round(clamp(pixels[offset] * factor, 0, 255));
+    pixels[offset + 1] = Math.round(clamp(pixels[offset + 1] * factor, 0, 255));
+    pixels[offset + 2] = Math.round(clamp(pixels[offset + 2] * factor, 0, 255));
+    return pixels;
+  }
+
   function buildFoldField(fabricPixels, width, height, strength = 1) {
     const size = width * height;
     const luminance = new Float32Array(size);
@@ -77,7 +88,7 @@
         const length = Math.hypot(gradientX, gradientY) || 1;
         dx[index] = gradientX === 0 ? 0 : clamp(-gradientX / length * displacement, -15, 15);
         dy[index] = gradientY === 0 ? 0 : clamp(-gradientY / length * displacement, -15, 15);
-        shade[index] = clamp(1 - trough / 45 * .42 + ridge / 75 * .1, .46, 1.08);
+        shade[index] = clamp(1 - trough / 45 * .28 + ridge / 75 * .08, .72, 1.08);
       }
     }
     return { dx, dy, shade };
@@ -113,7 +124,7 @@
       const scale = options.emboss / 0.60; // normalise against engine default
       for (let i = 0; i < field.shade.length; i++) {
         // Re-center at 1, scale the deviation
-        field.shade[i] = clamp(1 + (field.shade[i] - 1) * scale, 0.3, 1.15);
+        field.shade[i] = clamp(1 + (field.shade[i] - 1) * scale, 0.72, 1.12);
       }
     }
 
@@ -142,5 +153,5 @@
     artworkContext.putImageData(artwork, bounds.x, bounds.y);
   }
 
-  globalThis.FormFabricEngine = { buildFoldField, warpArtworkLayer, warpArtworkPixels };
+  globalThis.FormFabricEngine = { applyFoldLighting, buildFoldField, warpArtworkLayer, warpArtworkPixels };
 })();
